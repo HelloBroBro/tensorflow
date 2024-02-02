@@ -26,6 +26,7 @@ limitations under the License.
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "Eigen/Core"  // from @eigen_archive
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/numeric_options.h"
@@ -255,8 +256,7 @@ Stream::Stream(StreamExecutor *parent)
     : parent_(parent),
       implementation_(parent->implementation()->GetStreamImplementation()),
       allocated_(false),
-      status_(absl::InternalError("Uninitialized stream")),
-      temporary_memory_manager_(this) {
+      status_(absl::InternalError("Uninitialized stream")) {
   VLOG_CALL(PARAM(parent));
 }
 
@@ -269,7 +269,6 @@ Stream::~Stream() {
     LOG(WARNING) << "Error blocking host until done in stream destructor: "
                  << status;
   }
-  temporary_memory_manager_.ForceDeallocateAll();
 
   if (allocated_) {
     parent_->DeallocateStream(this);
@@ -334,230 +333,6 @@ Stream &Stream::ThenRecordEvent(Event *event) {
                << "at fault. Monitor for further errors.";
   }
 
-  return *this;
-}
-
-Stream &Stream::ThenBatchNormalizationForward(
-    const DeviceMemory<float> &x, const DeviceMemory<float> &scale,
-    const DeviceMemory<float> &offset,
-    const DeviceMemory<float> &estimated_mean,
-    const DeviceMemory<float> &estimated_variance,
-    const DeviceMemory<float> &side_input, const dnn::BatchDescriptor &x_desc,
-    const dnn::BatchDescriptor &scale_offset_desc, const double epsilon,
-    const double exponential_average_factor,
-    dnn::ActivationMode activation_mode, DeviceMemory<float> *y,
-    DeviceMemory<float> *batch_mean, DeviceMemory<float> *batch_var,
-    DeviceMemory<float> *saved_mean, DeviceMemory<float> *saved_inv_var,
-    bool is_training, ScratchAllocator *reserve_space_allocator,
-    ScratchAllocator *workspace_allocator) {
-  VLOG_CALL(PARAM(x), PARAM(scale), PARAM(offset), PARAM(x_desc),
-            PARAM(scale_offset_desc), PARAM(epsilon), PARAM(y));
-  if (dnn::DnnSupport *dnn = parent_->AsDnn()) {
-    CheckError(dnn->DoBatchNormalizationForward(
-        this, x, scale, offset, estimated_mean, estimated_variance, side_input,
-        x_desc, scale_offset_desc, epsilon, exponential_average_factor,
-        activation_mode, y, batch_mean, batch_var, saved_mean, saved_inv_var,
-        is_training, reserve_space_allocator, workspace_allocator));
-  } else {
-    SetErrorAndLogNoDnnSupport();
-  }
-  return *this;
-}
-
-Stream &Stream::ThenBatchNormalizationBackward(
-    const DeviceMemory<float> &y_backprop, const DeviceMemory<float> &x,
-    const DeviceMemory<float> &scale, const DeviceMemory<float> &offset,
-    const DeviceMemory<float> &mean, const DeviceMemory<float> &inv_var,
-    const DeviceMemory<float> &y, const dnn::BatchDescriptor &x_desc,
-    const dnn::BatchDescriptor &scale_offset_desc, const double epsilon,
-    dnn::ActivationMode activation_mode, DeviceMemory<float> *x_backprop,
-    DeviceMemory<float> *scale_backprop, DeviceMemory<float> *offset_backprop,
-    DeviceMemory<float> *side_input_backprop,
-    DeviceMemory<uint8_t> *reserve_space_data,
-    ScratchAllocator *workspace_allocator) {
-  VLOG_CALL(PARAM(y_backprop), PARAM(x), PARAM(scale), PARAM(x_desc),
-            PARAM(scale_offset_desc), PARAM(epsilon), PARAM(x_backprop),
-            PARAM(scale_backprop), PARAM(offset_backprop));
-  if (dnn::DnnSupport *dnn = parent_->AsDnn()) {
-    CheckError(dnn->DoBatchNormalizationBackward(
-        this, y_backprop, x, scale, offset, mean, inv_var, y, x_desc,
-        scale_offset_desc, epsilon, activation_mode, x_backprop, scale_backprop,
-        offset_backprop, side_input_backprop, reserve_space_data,
-        workspace_allocator));
-  } else {
-    SetErrorAndLogNoDnnSupport();
-  }
-  return *this;
-}
-
-Stream &Stream::ThenBatchNormalizationForward(
-    const DeviceMemory<Eigen::half> &x, const DeviceMemory<float> &scale,
-    const DeviceMemory<float> &offset,
-    const DeviceMemory<float> &estimated_mean,
-    const DeviceMemory<float> &estimated_variance,
-    const DeviceMemory<Eigen::half> &side_input,
-    const dnn::BatchDescriptor &x_desc,
-    const dnn::BatchDescriptor &scale_offset_desc, const double epsilon,
-    const double exponential_average_factor,
-    dnn::ActivationMode activation_mode, DeviceMemory<Eigen::half> *y,
-    DeviceMemory<float> *batch_mean, DeviceMemory<float> *batch_var,
-    DeviceMemory<float> *saved_mean, DeviceMemory<float> *saved_inv_var,
-    bool is_training, ScratchAllocator *reserve_space_allocator,
-    ScratchAllocator *workspace_allocator) {
-  VLOG_CALL(PARAM(x), PARAM(scale), PARAM(offset), PARAM(x_desc),
-            PARAM(scale_offset_desc), PARAM(epsilon), PARAM(y));
-  if (dnn::DnnSupport *dnn = parent_->AsDnn()) {
-    CheckError(dnn->DoBatchNormalizationForward(
-        this, x, scale, offset, estimated_mean, estimated_variance, side_input,
-        x_desc, scale_offset_desc, epsilon, exponential_average_factor,
-        activation_mode, y, batch_mean, batch_var, saved_mean, saved_inv_var,
-        is_training, reserve_space_allocator, workspace_allocator));
-  } else {
-    SetErrorAndLogNoDnnSupport();
-  }
-  return *this;
-}
-
-Stream &Stream::ThenBatchNormalizationBackward(
-    const DeviceMemory<Eigen::half> &y_backprop,
-    const DeviceMemory<Eigen::half> &x, const DeviceMemory<float> &scale,
-    const DeviceMemory<float> &offset, const DeviceMemory<float> &mean,
-    const DeviceMemory<float> &inv_var, const DeviceMemory<Eigen::half> &y,
-    const dnn::BatchDescriptor &x_desc,
-    const dnn::BatchDescriptor &scale_offset_desc, const double epsilon,
-    dnn::ActivationMode activation_mode, DeviceMemory<Eigen::half> *x_backprop,
-    DeviceMemory<float> *scale_backprop, DeviceMemory<float> *offset_backprop,
-    DeviceMemory<Eigen::half> *side_input_backprop,
-    DeviceMemory<uint8_t> *reserve_space_data,
-    ScratchAllocator *workspace_allocator) {
-  VLOG_CALL(PARAM(y_backprop), PARAM(x), PARAM(scale), PARAM(x_desc),
-            PARAM(scale_offset_desc), PARAM(epsilon), PARAM(x_backprop),
-            PARAM(scale_backprop), PARAM(offset_backprop));
-  if (dnn::DnnSupport *dnn = parent_->AsDnn()) {
-    CheckError(dnn->DoBatchNormalizationBackward(
-        this, y_backprop, x, scale, offset, mean, inv_var, y, x_desc,
-        scale_offset_desc, epsilon, activation_mode, x_backprop, scale_backprop,
-        offset_backprop, side_input_backprop, reserve_space_data,
-        workspace_allocator));
-
-  } else {
-    SetErrorAndLogNoDnnSupport();
-  }
-  return *this;
-}
-
-Stream &Stream::ThenBatchNormalizationForward(
-    const DeviceMemory<Eigen::bfloat16> &x, const DeviceMemory<float> &scale,
-    const DeviceMemory<float> &offset,
-    const DeviceMemory<float> &estimated_mean,
-    const DeviceMemory<float> &estimated_variance,
-    const DeviceMemory<Eigen::bfloat16> &side_input,
-    const dnn::BatchDescriptor &x_desc,
-    const dnn::BatchDescriptor &scale_offset_desc, const double epsilon,
-    const double exponential_average_factor,
-    dnn::ActivationMode activation_mode, DeviceMemory<Eigen::bfloat16> *y,
-    DeviceMemory<float> *batch_mean, DeviceMemory<float> *batch_var,
-    DeviceMemory<float> *saved_mean, DeviceMemory<float> *saved_inv_var,
-    bool is_training, ScratchAllocator *reserve_space_allocator,
-    ScratchAllocator *workspace_allocator) {
-  VLOG_CALL(PARAM(x), PARAM(scale), PARAM(offset), PARAM(x_desc),
-            PARAM(scale_offset_desc), PARAM(epsilon), PARAM(y));
-  if (dnn::DnnSupport *dnn = parent_->AsDnn()) {
-    CheckError(dnn->DoBatchNormalizationForward(
-        this, x, scale, offset, estimated_mean, estimated_variance, side_input,
-        x_desc, scale_offset_desc, epsilon, exponential_average_factor,
-        activation_mode, y, batch_mean, batch_var, saved_mean, saved_inv_var,
-        is_training, reserve_space_allocator, workspace_allocator));
-  } else {
-    SetErrorAndLogNoDnnSupport();
-  }
-  return *this;
-}
-
-Stream &Stream::ThenBatchNormalizationBackward(
-    const DeviceMemory<Eigen::bfloat16> &y_backprop,
-    const DeviceMemory<Eigen::bfloat16> &x, const DeviceMemory<float> &scale,
-    const DeviceMemory<float> &offset, const DeviceMemory<float> &mean,
-    const DeviceMemory<float> &inv_var, const DeviceMemory<Eigen::bfloat16> &y,
-    const dnn::BatchDescriptor &x_desc,
-    const dnn::BatchDescriptor &scale_offset_desc, const double epsilon,
-    dnn::ActivationMode activation_mode,
-    DeviceMemory<Eigen::bfloat16> *x_backprop,
-    DeviceMemory<float> *scale_backprop, DeviceMemory<float> *offset_backprop,
-    DeviceMemory<Eigen::bfloat16> *side_input_backprop,
-    DeviceMemory<uint8_t> *reserve_space_data,
-    ScratchAllocator *workspace_allocator) {
-  VLOG_CALL(PARAM(y_backprop), PARAM(x), PARAM(scale), PARAM(x_desc),
-            PARAM(scale_offset_desc), PARAM(epsilon), PARAM(x_backprop),
-            PARAM(scale_backprop), PARAM(offset_backprop));
-  if (dnn::DnnSupport *dnn = parent_->AsDnn()) {
-    CheckError(dnn->DoBatchNormalizationBackward(
-        this, y_backprop, x, scale, offset, mean, inv_var, y, x_desc,
-        scale_offset_desc, epsilon, activation_mode, x_backprop, scale_backprop,
-        offset_backprop, side_input_backprop, reserve_space_data,
-        workspace_allocator));
-
-  } else {
-    SetErrorAndLogNoDnnSupport();
-  }
-  return *this;
-}
-
-Stream &Stream::ThenConvolve(
-    const dnn::BatchDescriptor &input_descriptor,
-    const DeviceMemory<float> &input_data,
-    const dnn::FilterDescriptor &filter_descriptor,
-    const DeviceMemory<float> &filter_data,
-    const dnn::ConvolutionDescriptor &convolution_descriptor,
-    const dnn::BatchDescriptor &output_descriptor,
-    DeviceMemory<float> *output) {
-  if (ok()) {
-    CheckError(ConvolveWithAlgorithm(
-                   dnn::ConvolutionKind::FORWARD, input_descriptor, input_data,
-                   filter_descriptor, filter_data, output_descriptor, *output,
-                   convolution_descriptor,
-                   /*scratch_allocator=*/nullptr, dnn::AlgorithmConfig(),
-                   /*output_profile_result=*/nullptr)
-                   .ok());
-  }
-  return *this;
-}
-
-Stream &Stream::ThenNormalizeWithDimensions(
-    const dnn::NormalizeDescriptor &normalize_descriptor,
-    const dnn::BatchDescriptor &dimensions,
-    const DeviceMemory<float> &input_data, DeviceMemory<float> *output_data) {
-  VLOG_CALL(PARAM(normalize_descriptor), PARAM(dimensions), PARAM(input_data),
-            PARAM(output_data));
-
-  if (dnn::DnnSupport *dnn = parent_->AsDnn()) {
-    CheckError(dnn->DoNormalizeWithDimensions(
-        this, normalize_descriptor, dimensions, input_data, output_data));
-  } else {
-    SetErrorAndLogNoDnnSupport();
-  }
-  return *this;
-}
-
-Stream &Stream::ThenNormalizeBackwardWithDimensions(
-    const dnn::NormalizeDescriptor &normalize_descriptor,
-    const dnn::BatchDescriptor &dimensions, const DeviceMemory<float> &raw_data,
-    const DeviceMemory<float> &normalized_data,
-    const DeviceMemory<float> &normalized_variable_gradient,
-    DeviceMemory<float> *raw_variable_gradient,
-    ScratchAllocator *workspace_allocator) {
-  VLOG_CALL(PARAM(normalize_descriptor), PARAM(dimensions), PARAM(raw_data),
-            PARAM(normalized_data), PARAM(normalized_variable_gradient),
-            PARAM(raw_variable_gradient), PARAM(workspace_allocator));
-
-  if (dnn::DnnSupport *dnn = parent_->AsDnn()) {
-    CheckError(dnn->DoNormalizeBackwardWithDimensions(
-        this, normalize_descriptor, dimensions, raw_data, normalized_data,
-        normalized_variable_gradient, raw_variable_gradient,
-        workspace_allocator));
-  } else {
-    SetErrorAndLogNoDnnSupport();
-  }
   return *this;
 }
 
@@ -773,59 +548,6 @@ Stream &Stream::ThenBlasCopy(uint64_t elem_count, const DeviceMemory<float> &x,
       impl;
   return impl(this, &blas::BlasSupport::DoBlasCopy, elem_count, x, incx, y,
               incy);
-}
-
-Stream &Stream::ThenBlasScal(uint64_t elem_count, float alpha,
-                             DeviceMemory<float> *x, int incx) {
-  VLOG_CALL(PARAM(elem_count), PARAM(alpha), PARAM(x), PARAM(incx));
-
-  ThenBlasImpl<uint64_t, float, DeviceMemory<float> *, int> impl;
-  return impl(this, &blas::BlasSupport::DoBlasScal, elem_count, alpha, x, incx);
-}
-
-Stream &Stream::ThenBlasScal(uint64_t elem_count, double alpha,
-                             DeviceMemory<double> *x, int incx) {
-  VLOG_CALL(PARAM(elem_count), PARAM(alpha), PARAM(x), PARAM(incx));
-
-  ThenBlasImpl<uint64_t, double, DeviceMemory<double> *, int> impl;
-  return impl(this, &blas::BlasSupport::DoBlasScal, elem_count, alpha, x, incx);
-}
-
-Stream &Stream::ThenBlasScal(uint64_t elem_count, float alpha,
-                             DeviceMemory<std::complex<float>> *x, int incx) {
-  VLOG_CALL(PARAM(elem_count), PARAM(alpha), PARAM(x), PARAM(incx));
-
-  ThenBlasImpl<uint64_t, float, DeviceMemory<std::complex<float>> *, int> impl;
-  return impl(this, &blas::BlasSupport::DoBlasScal, elem_count, alpha, x, incx);
-}
-
-Stream &Stream::ThenBlasScal(uint64_t elem_count, double alpha,
-                             DeviceMemory<std::complex<double>> *x, int incx) {
-  VLOG_CALL(PARAM(elem_count), PARAM(alpha), PARAM(x), PARAM(incx));
-
-  ThenBlasImpl<uint64_t, double, DeviceMemory<std::complex<double>> *, int>
-      impl;
-  return impl(this, &blas::BlasSupport::DoBlasScal, elem_count, alpha, x, incx);
-}
-
-Stream &Stream::ThenBlasScal(uint64_t elem_count, std::complex<float> alpha,
-                             DeviceMemory<std::complex<float>> *x, int incx) {
-  VLOG_CALL(PARAM(elem_count), PARAM(alpha), PARAM(x), PARAM(incx));
-
-  ThenBlasImpl<uint64_t, std::complex<float>,
-               DeviceMemory<std::complex<float>> *, int>
-      impl;
-  return impl(this, &blas::BlasSupport::DoBlasScal, elem_count, alpha, x, incx);
-}
-
-Stream &Stream::ThenBlasScal(uint64_t elem_count, std::complex<double> alpha,
-                             DeviceMemory<std::complex<double>> *x, int incx) {
-  VLOG_CALL(PARAM(elem_count), PARAM(alpha), PARAM(x), PARAM(incx));
-
-  ThenBlasImpl<uint64_t, std::complex<double>,
-               DeviceMemory<std::complex<double>> *, int>
-      impl;
-  return impl(this, &blas::BlasSupport::DoBlasScal, elem_count, alpha, x, incx);
 }
 
 Stream &Stream::ThenBlasGemv(blas::Transpose trans, uint64_t m, uint64 n,
@@ -1115,18 +837,6 @@ Stream &Stream::ThenBlasGemmBatchedWithScratch(
   return impl(this, &blas::BlasSupport::DoBlasGemmBatched, transa, transb, m, n,
               k, alpha, a, lda, b, ldb, beta, c, ldc, batch_count,
               numeric_options, scratch_allocator, context);
-}
-
-Stream &Stream::ThenBlasGemmBatched(
-    blas::Transpose transa, blas::Transpose transb, uint64_t m, uint64 n,
-    uint64_t k, float alpha, DeviceMemorySlice<float> a, int lda,
-    DeviceMemorySlice<float> b, int ldb, float beta, DeviceMemorySlice<float> c,
-    int ldc, int batch_count, const NumericOptions &numeric_options,
-    blas::CallContext context) {
-  return ThenBlasGemmBatchedWithScratch(transa, transb, m, n, k, alpha, a, lda,
-                                        b, ldb, beta, c, ldc, batch_count,
-                                        numeric_options,
-                                        /*scratch_allocator=*/nullptr, context);
 }
 
 Stream &Stream::ThenBlasGemmBatchedWithScratch(
@@ -1581,100 +1291,6 @@ void Stream::CheckError(bool operation_retcode) {
   status_ = absl::InternalError("Unknown error");
 }
 
-Stream &Stream::ThenFft(fft::Plan *plan,
-                        const DeviceMemory<std::complex<float>> &input,
-                        DeviceMemory<std::complex<float>> *output) {
-  VLOG_CALL(PARAM(plan), PARAM(input), PARAM(output));
-
-  if (fft::FftSupport *fft = parent_->AsFft()) {
-    CheckError(fft->DoFft(this, plan, input, output));
-  } else {
-    SetError();
-    LOG(INFO) << DebugStreamPointers()
-              << " attempting to perform FFT operation using StreamExecutor"
-                 " without FFT support";
-  }
-  return *this;
-}
-
-Stream &Stream::ThenFft(fft::Plan *plan,
-                        const DeviceMemory<std::complex<double>> &input,
-                        DeviceMemory<std::complex<double>> *output) {
-  VLOG_CALL(PARAM(plan), PARAM(input), PARAM(output));
-
-  if (fft::FftSupport *fft = parent_->AsFft()) {
-    CheckError(fft->DoFft(this, plan, input, output));
-  } else {
-    SetError();
-    LOG(INFO) << DebugStreamPointers()
-              << " attempting to perform FFT operation using StreamExecutor"
-                 " without FFT support";
-  }
-  return *this;
-}
-
-Stream &Stream::ThenFft(fft::Plan *plan, const DeviceMemory<float> &input,
-                        DeviceMemory<std::complex<float>> *output) {
-  VLOG_CALL(PARAM(plan), PARAM(input), PARAM(output));
-
-  if (fft::FftSupport *fft = parent_->AsFft()) {
-    CheckError(fft->DoFft(this, plan, input, output));
-  } else {
-    SetError();
-    LOG(INFO) << DebugStreamPointers()
-              << " attempting to perform FFT operation using StreamExecutor"
-                 " without FFT support";
-  }
-  return *this;
-}
-
-Stream &Stream::ThenFft(fft::Plan *plan, const DeviceMemory<double> &input,
-                        DeviceMemory<std::complex<double>> *output) {
-  VLOG_CALL(PARAM(plan), PARAM(input), PARAM(output));
-
-  if (fft::FftSupport *fft = parent_->AsFft()) {
-    CheckError(fft->DoFft(this, plan, input, output));
-  } else {
-    SetError();
-    LOG(INFO) << DebugStreamPointers()
-              << " attempting to perform FFT operation using StreamExecutor"
-                 " without FFT support";
-  }
-  return *this;
-}
-
-Stream &Stream::ThenFft(fft::Plan *plan,
-                        const DeviceMemory<std::complex<float>> &input,
-                        DeviceMemory<float> *output) {
-  VLOG_CALL(PARAM(plan), PARAM(input), PARAM(output));
-
-  if (fft::FftSupport *fft = parent_->AsFft()) {
-    CheckError(fft->DoFft(this, plan, input, output));
-  } else {
-    SetError();
-    LOG(INFO) << DebugStreamPointers()
-              << " attempting to perform FFT operation using StreamExecutor"
-                 " without FFT support";
-  }
-  return *this;
-}
-
-Stream &Stream::ThenFft(fft::Plan *plan,
-                        const DeviceMemory<std::complex<double>> &input,
-                        DeviceMemory<double> *output) {
-  VLOG_CALL(PARAM(plan), PARAM(input), PARAM(output));
-
-  if (fft::FftSupport *fft = parent_->AsFft()) {
-    CheckError(fft->DoFft(this, plan, input, output));
-  } else {
-    SetError();
-    LOG(INFO) << DebugStreamPointers()
-              << " attempting to perform FFT operation using StreamExecutor"
-                 " without FFT support";
-  }
-  return *this;
-}
-
 // It looks confusing, but all this is doing is inserting a callback at the
 // present point in the stream to then enqueue a task on the host executor.
 Stream &Stream::ThenEnqueueOnBackgroundThread(
@@ -1700,8 +1316,6 @@ absl::Status Stream::BlockHostUntilDone() {
     LOG(INFO) << DebugStreamPointers() << " " << status;
     return status;
   }
-
-  temporary_memory_manager_.DeallocateFinalizedTemporaries();
 
   absl::Status error = parent_->BlockHostUntilDone(this);
   CheckError(error.ok());

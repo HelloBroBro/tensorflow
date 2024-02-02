@@ -110,6 +110,20 @@ double EvaluateMakespan(const AutoShardingSolverRequest& request,
 AutoShardingSolverRequest ScaleRequest(
     const AutoShardingSolverRequest& request);
 
+// Determines if strategy 'first' is dominated by strategy 'second' (i.e., its
+// costs are all equal or worse, and it has identical alias mappings).
+bool CheckDominance(const AutoShardingSolverRequest& request,
+                    const std::vector<EdgeIdx>& src_edges,
+                    const std::vector<EdgeIdx>& dst_edges,
+                    const std::vector<AliasIdx>& src_aliases,
+                    const std::vector<AliasIdx>& dst_aliases, NodeIdx node_idx,
+                    NodeStrategyIdx first, NodeStrategyIdx second);
+
+// For every node, examine each sharding strategy to see if it is equivalent to
+// another (which, if so, would allow the reusing of strategy variables).
+std::vector<std::vector<NodeStrategyIdx>> StratFollow(
+    const AutoShardingSolverRequest& request);
+
 }  // namespace spmd
 }  // namespace xla
 

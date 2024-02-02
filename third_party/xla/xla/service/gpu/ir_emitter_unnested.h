@@ -156,12 +156,16 @@ class IrEmitterUnnested : public IrEmitter {
   absl::Status EmitCublasLtMatmulThunkF8(mlir::Operation* op);
   absl::Status EmitCublasLtMatmulThunkF8(const HloCustomCallInstruction* instr);
   absl::Status EmitConvolutionReorderThunk(mlir::Operation* op);
+  absl::Status EmitConvolutionReorderThunk(
+      const HloCustomCallInstruction* instr);
   absl::Status EmitNormThunk(mlir::Operation* op);
+  absl::Status EmitNormThunk(const HloCustomCallInstruction* instr);
   absl::Status EmitFusedMHAThunk(mlir::Operation* op);
   absl::Status EmitFusedMHABackwardThunk(mlir::Operation* op);
 #endif  // GOOGLE_CUDA
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
   absl::Status EmitCubDeviceRadixSort(mlir::Operation* op);
+  absl::Status EmitCubDeviceRadixSort(const HloCustomCallInstruction* instr);
   absl::Status EmitCholeskyThunk(mlir::Operation* op);
   absl::Status EmitCholeskyThunk(const HloInstruction* instr);
 #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
@@ -429,21 +433,12 @@ class IrEmitterUnnested : public IrEmitter {
   absl::StatusOr<std::unique_ptr<Thunk>> BuildWhileThunk(
       mlir::lmhlo::WhileOp while_op, const Thunk::ThunkInfo& thunk_info,
       const absl::flat_hash_map<const mlir::Operation*, const HloInstruction*>&
-          hlo_for_lmhlo);
+          hlo_for_lmhlo,
+      std::optional<int64_t> trip_count);
 
   absl::StatusOr<std::unique_ptr<Thunk>> BuildWhileThunk(
-      const HloInstruction* instr, const Thunk::ThunkInfo& thunk_info);
-
-  // Returns a ForThunk which executes 'loop_limit' invocations of a thunk
-  // sequence from the 'body' sub-computation of the while instruction.
-  absl::StatusOr<std::unique_ptr<Thunk>> BuildForThunk(
-      const HloInstruction* instr, int64_t loop_limit);
-
-  absl::StatusOr<std::unique_ptr<Thunk>> BuildForThunk(
-      mlir::lmhlo::WhileOp while_op, const Thunk::ThunkInfo& thunk_info,
-      int64_t loop_limit,
-      const absl::flat_hash_map<const mlir::Operation*, const HloInstruction*>&
-          hlo_for_lmhlo);
+      const HloInstruction* instr, const Thunk::ThunkInfo& thunk_info,
+      std::optional<int64_t> trip_count);
 
   // Returns a ConditionalThunk which executes the thunk sequence for the
   // 'branch_computation' corresponding to the predicate/branch_index of the
