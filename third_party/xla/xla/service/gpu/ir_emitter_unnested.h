@@ -227,6 +227,9 @@ class IrEmitterUnnested : public IrEmitter {
 
   absl::Status EmitNcclAsyncDone(Thunk::Kind kind, const HloInstruction* instr);
 
+  absl::Status EmitWaitForStreamsThunk(const HloInstruction* inst,
+                                       GpuBackendConfig& gpu_config,
+                                       bool is_async_done);
   template <typename ThunkType, typename OpT>
   absl::Status EmitReplicaOrPartitionId(mlir::Operation* op);
   template <typename ThunkType>
@@ -331,7 +334,7 @@ class IrEmitterUnnested : public IrEmitter {
   //   return;
   // }
   //   ```
-  absl::Status EmitPadToStatic(mlir::Operation* op);
+  absl::Status EmitPadToStatic(const HloCustomCallInstruction* instr);
 
   // Input = {dynamic array(with dynamic dimension meta data at the end)}
   // Output = {static array, dynamic_dim0, dynamic_dim1}

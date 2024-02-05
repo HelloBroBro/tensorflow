@@ -375,11 +375,13 @@ cc_library(
         "//xla/service/gpu/runtime3:kernel_thunk",
         "//xla/service/gpu/runtime3:nccl_all_gather_thunk",
         "//xla/service/gpu/runtime3:nccl_all_reduce_thunk",
+        "//xla/service/gpu/runtime3:nccl_all_to_all_thunk",
         "//xla/service/gpu/runtime3:norm_thunk",
         "//xla/service/gpu/runtime3:outfeed_thunk",
         "//xla/service/gpu/runtime3:replica_id_thunk",
         "//xla/service/gpu/runtime3:send_recv_thunk",
         "//xla/service/gpu/runtime3:sequential_thunk",
+        "//xla/service/gpu/runtime3:wait_for_streams_thunk",
         "//xla/service/gpu/runtime3:while_thunk",
         "//xla/service/llvm_ir:buffer_assignment_util",
         "//xla/service/llvm_ir:dynamic_update_slice_util",
@@ -824,6 +826,7 @@ cc_library(
     hdrs = ["thunk.h"],
     visibility = ["//visibility:public"],
     deps = [
+        ":backend_configs_cc",
         ":buffer_allocations",
         ":gpu_executable_run_options",
         ":nccl_clique",
@@ -846,6 +849,7 @@ cc_library(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         "@llvm-project//mlir:IR",
+        "@local_tsl//tsl/lib/gtl:int_type",
         "@local_tsl//tsl/platform:statusor",
     ],
 )
@@ -853,7 +857,6 @@ cc_library(
 cc_library(
     name = "nccl_collective_thunks",
     srcs = [
-        "nccl_all_to_all_thunk.cc",
         "nccl_collective_permute_thunk.cc",
         "nccl_collective_thunk.cc",
         "nccl_p2p_thunk_common.cc",
@@ -861,7 +864,6 @@ cc_library(
         "nccl_send_thunk.cc",
     ],
     hdrs = [
-        "nccl_all_to_all_thunk.h",
         "nccl_collective_permute_thunk.h",
         "nccl_collective_thunk.h",
         "nccl_p2p_thunk_common.h",
@@ -893,6 +895,7 @@ cc_library(
         "//xla/service:computation_placer",
         "//xla/service:global_device_id",
         "//xla/service:hlo_parser",
+        "//xla/service:rendezvous",
         "//xla/service/llvm_ir:llvm_util",
         "//xla/stream_executor",
         "//xla/stream_executor/gpu:gpu_activation_header",
@@ -915,6 +918,7 @@ cc_library(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
         "@com_google_absl//absl/types:span",
         "@llvm-project//mlir:IR",
         "@local_tsl//tsl/platform:errors",
@@ -1239,6 +1243,7 @@ cc_library(
     deps = [
         ":buffer_allocations",
         ":gpu_constants",
+        ":gpu_executable_run_options",
         ":ir_emission_utils",
         ":nccl_clique",
         ":nccl_clique_key",
@@ -1277,6 +1282,7 @@ cc_library(
         "//xla/stream_executor/gpu:gpu_timer_header",
         "//xla/stream_executor/rocm:rocm_platform_id",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:btree",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:inlined_vector",

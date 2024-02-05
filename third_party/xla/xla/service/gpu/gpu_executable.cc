@@ -16,7 +16,6 @@ limitations under the License.
 #include "xla/service/gpu/gpu_executable.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -27,7 +26,7 @@ limitations under the License.
 #include <variant>
 #include <vector>
 
-#include "absl/algorithm/container.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/inlined_vector.h"
@@ -49,6 +48,7 @@ limitations under the License.
 #include "xla/service/buffer_assignment.h"
 #include "xla/service/gpu/buffer_allocations.h"
 #include "xla/service/gpu/gpu_constants.h"
+#include "xla/service/gpu/gpu_executable_run_options.h"
 #include "xla/service/gpu/nccl_clique.h"
 #include "xla/service/gpu/nccl_clique_key.h"
 #include "xla/service/gpu/non_atomically_upgradeable_rw_lock.h"
@@ -102,20 +102,19 @@ namespace gpu {
 bool IsXlaRuntimeExecutableEnabled(const HloModuleConfig& config) {
   bool enabled = config.debug_options().xla_gpu_enable_xla_runtime_executable();
   if (enabled) {
-    LOG(WARNING)
-        << "XLA:GPU uses deprecated xla runtime by setting "
-           "--xla_gpu_enable_xla_runtime_executable flag to true. This flag "
+    LOG(ERROR)
+        << "XLA:GPU tried to use deprecated xla runtime by setting "
+           "--xla_gpu_enable_xla_runtime_executable flag to `true` but the "
+           "flag value was ignored as XLA:GPU uses default runtime. This flag "
            "together with the deprecated code will be removed soon. Please "
-           "check that your workloads can run with default XLA runtime and if "
-           "not report bugs to XLA team ASAP.";
+           "report bugs to XLA team if this breaks your workloads.";
   }
-  return enabled;
+  return false;
 }
 
 namespace {
 
 using ::tsl::profiler::ScopedAnnotation;
-using ::tsl::profiler::ScopedAnnotationAlways;
 
 bool NeedsAsyncCommsStream(Thunk& thunk) {
   switch (thunk.kind()) {
@@ -173,9 +172,6 @@ GpuExecutable::GpuExecutable(GpuExecutable::Params params)
   *(uint64_t*)(&binary_[binary_.size() - 16]) = tsl::EnvTime::NowNanos();
   *(uint64_t*)(&binary_[binary_.size() - 8]) = tsl::random::New64();
 #endif
-  if (has_module()) {
-    annotation_info_.emplace(module());
-  }
   if (has_module() && enable_debug_info_manager_) {
     XlaDebugInfoManager::Get()->RegisterModule(shared_module(),
                                                buffer_assignment_->ToProto());
@@ -307,15 +303,34 @@ absl::Status MaybeRendezvousAfterInitialization(
     const ServiceExecutableRunOptions* run_options,
     RendezvousSingleFlag& thunks_initialized);
 
-absl::Status ExecuteThunks(const std::string& module_name,
-                           ModuleIdentifier module_id,
-                           const ThunkSequence& thunk_sequence,
-                           Thunk::ExecutableSource executable_source,
-                           const ServiceExecutableRunOptions* run_options,
-                           const BufferAllocations& buffer_allocations,
-                           bool block_host_until_done,
-                           bool use_highest_priority_for_async_stream,
-                           RendezvousSingleFlag& thunks_initialized) {
+absl::flat_hash_set<ExecutionStreamId> ExtractAdditionalComputeStreamIds(
+    const HloModule& module) {
+  absl::flat_hash_set<ExecutionStreamId> stream_ids;
+  for (const HloComputation* comp : module.computations()) {
+    for (const HloInstruction* hlo : comp->instructions()) {
+      if (hlo->has_backend_config() &&
+          hlo->backend_config<GpuBackendConfig>().ok()) {
+        int64_t op_queue_id = hlo->backend_config<GpuBackendConfig>()
+                                  .value()
+                                  .operation_queue_id();
+        if (op_queue_id > 0) {
+          stream_ids.insert(ExecutionStreamId(op_queue_id));
+        }
+      }
+    }
+  }
+  return stream_ids;
+}
+
+absl::Status ExecuteThunks(
+    const std::string& module_name, ModuleIdentifier module_id,
+    const ThunkSequence& thunk_sequence,
+    Thunk::ExecutableSource executable_source,
+    const ServiceExecutableRunOptions* run_options,
+    const BufferAllocations& buffer_allocations, bool block_host_until_done,
+    bool use_highest_priority_for_async_stream,
+    RendezvousSingleFlag& thunks_initialized,
+    absl::flat_hash_set<ExecutionStreamId> additional_compute_stream_ids) {
   se::Stream* main_stream = run_options->stream();
   se::StreamExecutor* executor = main_stream->parent();
   stream_executor::StreamPriority stream_priority =
@@ -344,6 +359,22 @@ absl::Status ExecuteThunks(const std::string& module_name,
     command_buffer_trace_stream = borrowed_command_buffer_trace_stream->get();
   }
 
+  // Borrow stream for additional compute streams
+  Thunk::ExecutionStreamIdMap additional_compute_streams;
+  std::vector<StreamPool::Ptr> additional_streams;
+  int num_streams = additional_compute_stream_ids.size();
+  if (num_streams > 0) {
+    TF_ASSIGN_OR_RETURN(
+        additional_streams,
+        run_options->BorrowStreams(executor->device_ordinal(), num_streams));
+
+    int64_t i = 0;
+    for (auto& stream : additional_compute_stream_ids) {
+      additional_compute_streams[stream] = additional_streams.at(i).get();
+      i++;
+    }
+    VLOG(2) << "Using " << num_streams << " additional compute streams.";
+  }
   tsl::profiler::TraceMe hlo_module_activity(
       [&] { return absl::StrCat(module_name, ":XLA GPU module"); },
       tsl::profiler::TraceMeLevel::kInfo);
@@ -405,13 +436,14 @@ absl::Status ExecuteThunks(const std::string& module_name,
   Thunk::ExecuteParams execute_params = Thunk::ExecuteParams::Create(
       *run_options, buffer_allocations, main_stream,
       command_buffer_trace_stream, async_comms_streams, &collective_params,
-      &collective_cliques);
+      &collective_cliques, additional_compute_streams);
 
   for (const std::unique_ptr<Thunk>& thunk : thunk_sequence) {
     // Annotate execution of this op if tracing was enabled when we started
     // running this module.  If tracing is enabled *while* we're running the
     // module, we won't get any data, but that's probably an OK trade-off.
-    ScopedAnnotation annotation([&] { return thunk->profile_annotation(); });
+    tsl::profiler::ScopedAnnotation annotation(
+        [&] { return thunk->profile_annotation(); });
     VLOG(3) << "Executing the thunk for " << thunk->profile_annotation();
     if (NeedsAsyncCommsStream(*thunk)) {
       for (se::Stream* async_stream : async_comms_streams) {
@@ -947,24 +979,6 @@ absl::StatusOr<ExecutionOutput> GpuExecutable::ExecuteAsyncOnStreamImpl(
   return std::move(result);
 }
 
-namespace {
-struct ModuleAnnotationManager {
-  ModuleAnnotationManager(const std::optional<ModuleAnnotations>& annotations) {
-    if (annotations.has_value()) {
-      m_old_annotations = SetCurrentModuleAnnotations(&(*annotations));
-    }
-  }
-  ~ModuleAnnotationManager() {
-    if (m_old_annotations.has_value()) {
-      SetCurrentModuleAnnotations(*m_old_annotations);
-    }
-  }
-
- private:
-  std::optional<const ModuleAnnotations*> m_old_annotations;
-};
-}  // namespace
-
 absl::Status GpuExecutable::ExecuteThunksOrXlaRuntime(
     const ServiceExecutableRunOptions* run_options,
     const BufferAllocations& buffer_allocations, bool block_host_until_done,
@@ -972,20 +986,18 @@ absl::Status GpuExecutable::ExecuteThunksOrXlaRuntime(
   TF_RETURN_IF_ERROR(
       CheckCompatibilityWithServiceExecutableRunOptions(run_options));
 
-  // There isn't always an HLO module.
-  ModuleIdentifier unique_id = -1;
-  if (has_module()) {
-    unique_id = module().unique_id();
-  }
+  ScopedAnnotation annotation([&] { return module_annotations_.top_level; });
+  absl::Cleanup annotations_cleanup =
+      [previous = SetCurrentModuleAnnotations(&module_annotations_)] {
+        SetCurrentModuleAnnotations(previous);
+      };
 
-  ScopedAnnotationAlways annotation([&]() -> ModuleAnnotation {
-    if (annotation_info_) {
-      return annotation_info_->top_level;
-    } else {
-      return {module_name_, unique_id};
-    }
-  });
-  ModuleAnnotationManager set_current_kernel_annotations{annotation_info_};
+  ModuleIdentifier unique_id = has_module() ? module().unique_id() : -1;
+
+  absl::flat_hash_set<ExecutionStreamId> additional_compute_stream_ids;
+  if (has_module()) {
+    additional_compute_stream_ids = ExtractAdditionalComputeStreamIds(module());
+  }
 
   if (thunks_) {
     Thunk::ExecutableSource executable_source = {text_, binary_};
@@ -998,7 +1010,7 @@ absl::Status GpuExecutable::ExecuteThunksOrXlaRuntime(
                            .debug_options()
                            .xla_gpu_enable_highest_priority_async_stream()
                      : false,
-        thunks_initialized_flag_);
+        thunks_initialized_flag_, additional_compute_stream_ids);
   }
 
   // Match IrEmitter's temp buffer allocation for kernel launches. See
@@ -1171,7 +1183,6 @@ GpuExecutable::GpuExecutable(
       output_info_(std::move(output_info)),
       enable_debug_info_manager_(true) {
   if (has_module()) {
-    annotation_info_.emplace(module());
     XlaDebugInfoManager::Get()->RegisterModule(shared_module(),
                                                BufferAssignmentProto());
   }

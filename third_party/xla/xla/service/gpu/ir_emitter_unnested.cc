@@ -116,7 +116,6 @@ limitations under the License.
 #include "xla/service/gpu/kernels/topk_custom_kernel.h"
 #include "xla/service/gpu/launch_dimensions.h"
 #include "xla/service/gpu/matmul_utils.h"
-#include "xla/service/gpu/nccl_all_to_all_thunk.h"
 #include "xla/service/gpu/nccl_api.h"
 #include "xla/service/gpu/nccl_collective_permute_thunk.h"
 #include "xla/service/gpu/nccl_collective_thunk.h"
@@ -137,11 +136,13 @@ limitations under the License.
 #include "xla/service/gpu/runtime3/kernel_thunk.h"
 #include "xla/service/gpu/runtime3/nccl_all_gather_thunk.h"
 #include "xla/service/gpu/runtime3/nccl_all_reduce_thunk.h"
+#include "xla/service/gpu/runtime3/nccl_all_to_all_thunk.h"
 #include "xla/service/gpu/runtime3/norm_thunk.h"
 #include "xla/service/gpu/runtime3/outfeed_thunk.h"
 #include "xla/service/gpu/runtime3/replica_id_thunk.h"
 #include "xla/service/gpu/runtime3/send_recv_thunk.h"
 #include "xla/service/gpu/runtime3/sequential_thunk.h"
+#include "xla/service/gpu/runtime3/wait_for_streams_thunk.h"
 #include "xla/service/gpu/runtime3/while_thunk.h"
 #include "xla/service/gpu/thunk.h"
 #include "xla/service/llvm_ir/buffer_assignment_util.h"
@@ -503,21 +504,20 @@ void IrEmitterUnnested::CreateStore(llvm::Value* data, llvm::Value* address,
 
 // Input = {dynamic array(with dynamic dimension meta data at the end)}
 // Output = {static array, dynamic_dim0, dynamic_dim1}
-absl::Status IrEmitterUnnested::EmitPadToStatic(mlir::Operation* op) {
-  // TODO(jurahul): Create an op to represent PadToStatic.
-  auto pad_to_static = mlir::cast<mlir::lmhlo::CustomCallOp>(op);
+absl::Status IrEmitterUnnested::EmitPadToStatic(
+    const HloCustomCallInstruction* instr) {
   int unroll_factor = 1;
-  std::string ir_name = GetIrNameFromLoc(pad_to_static.getLoc());
+  std::string ir_name = std::string(instr->name());
 
-  const Shape& input_shape = GetShape(pad_to_static.getArgs().front());
+  const Shape& input_shape = instr->operand(0)->shape();
 
   LaunchDimensions launch_dimensions = CalculateLaunchDimensions(
       input_shape, ir_emitter_context_->gpu_device_info(), {unroll_factor});
   std::vector<llvm_ir::IrArray> input_arrays;
   std::vector<llvm_ir::IrArray> output_arrays;
-  TF_ASSIGN_OR_RETURN(
-      std::tie(input_arrays, output_arrays),
-      BuildKernelThunkForNonFusionOp(pad_to_static, launch_dimensions));
+  TF_ASSIGN_OR_RETURN(std::tie(input_arrays, output_arrays),
+                      BuildKernelThunkForNonFusionOp(instr, instr->operands(),
+                                                     launch_dimensions));
 
   CHECK_EQ(output_arrays.size(), 0);
   const llvm_ir::IrArray source_array = input_arrays[0];
@@ -525,8 +525,8 @@ absl::Status IrEmitterUnnested::EmitPadToStatic(mlir::Operation* op) {
   auto output_dim_arrays =
       absl::Span<const llvm_ir::IrArray>(input_arrays).subspan(2);
 
-  llvm::Type* index_ty = GetIndexTypeForKernel(
-      pad_to_static, launch_dimensions.launch_bound(), &b_);
+  llvm::Type* index_ty =
+      GetIndexTypeForKernel(instr, launch_dimensions.launch_bound(), &b_);
 
   // pseudo code for PadToStatic on a 2d array
   //   int* source_array = input[0];
@@ -544,10 +544,13 @@ absl::Status IrEmitterUnnested::EmitPadToStatic(mlir::Operation* op) {
   //   int* dyn_dim1_size = source_array + meta_data_offset + sizeof(int);
   std::vector<llvm::Value*> dynamic_dims;
   int alignment = raw_data_size % sizeof(int32_t);
-  for (int64_t i = 1; i < pad_to_static.getOutput().size(); ++i) {
+  std::vector<ShapeUtil::IndexedShape> output_shapes =
+      ShapeUtil::GetLeafShapes(instr->shape());
+
+  for (int64_t i = 1; i < output_shapes.size(); ++i) {
     // Dynamic size of each dimension is attached at the end of the source
     // array(operand(0)). We need to extract these value.
-    const Shape& dim_shape = GetShape(pad_to_static.getOutput()[i]);
+    const Shape& dim_shape = output_shapes[i].shape;
     TF_RET_CHECK(Shape::Equal()(dim_shape, ShapeUtil::MakeScalarShape(S32)));
 
     const int64_t dim_index = i - 1;
@@ -567,7 +570,7 @@ absl::Status IrEmitterUnnested::EmitPadToStatic(mlir::Operation* op) {
   //     *output[2] = *dyn_dim1_size;
   //   }
   KernelSupportLibrary{&b_}.If("is_thread_0", IsBlock0Thread0(&b_), [&] {
-    for (int64_t i = 1; i < pad_to_static.getOutput().size(); ++i) {
+    for (int64_t i = 1; i < output_shapes.size(); ++i) {
       const int64_t dim_index = i - 1;
       llvm::Value* dest_dim_size_address =
           output_dim_arrays[dim_index].GetBasePointer();
@@ -617,7 +620,7 @@ absl::Status IrEmitterUnnested::EmitPadToStatic(mlir::Operation* op) {
     return absl::OkStatus();
   };
 
-  const Shape& data_shape = GetShape(pad_to_static.getOutput().front());
+  const Shape& data_shape = instr->shape().tuple_shapes(0);
   TF_RETURN_IF_ERROR(ParallelLoopEmitter(body_generator, data_shape,
                                          launch_dimensions, &b_,
                                          {unroll_factor})
@@ -3793,6 +3796,36 @@ absl::Status IrEmitterUnnested::EmitNcclAsyncDone(Thunk::Kind kind,
   return absl::OkStatus();
 }
 
+absl::Status IrEmitterUnnested::EmitWaitForStreamsThunk(
+    const HloInstruction* inst, GpuBackendConfig& gpu_config,
+    bool is_async_done) {
+  std::vector<ExecutionStreamId> wait_on_streams;
+  ExecutionStreamId source_stream_id = Thunk::GetMainComputeStreamId();
+  // If it's for an async done, then we need to sychronize on the execution
+  // stream of the instruction from main compute stream
+  if (is_async_done) {
+    wait_on_streams.push_back(
+        ExecutionStreamId(gpu_config.operation_queue_id()));
+  } else if (gpu_config.wait_on_operation_queues().size() == 0) {
+    // If wait on queue is empty, we just synchronize on the main compute
+    // stream from the execution stream.
+    wait_on_streams.push_back(Thunk::GetMainComputeStreamId());
+    source_stream_id = gpu_config.operation_queue_id();
+  } else {
+    // Else, we synchronize on all specified
+    // streams from the execution stream.
+    for (int64_t stream_id : gpu_config.wait_on_operation_queues()) {
+      wait_on_streams.push_back(ExecutionStreamId(stream_id));
+    }
+    source_stream_id = gpu_config.operation_queue_id();
+  }
+
+  AddThunkToThunkSequence(std::make_unique<WaitForStreamsThunk>(
+      Thunk::ThunkInfo::WithProfileAnnotation(inst), source_stream_id,
+      wait_on_streams));
+  return absl::OkStatus();
+}
+
 absl::StatusOr<std::vector<ShapedSlice>> IrEmitterUnnested::GetShapedSlices(
     mlir::Operation::operand_range operands) {
   std::vector<ShapedSlice> shaped_slices;
@@ -4193,7 +4226,8 @@ absl::Status IrEmitterUnnested::EmitOp(
 
   if (auto call = mlir::dyn_cast<mlir::lmhlo::CustomCallOp>(op)) {
     if (call.getCallTargetName() == "PadToStatic") {
-      return EmitPadToStatic(op);
+      return EmitPadToStatic(
+          Cast<HloCustomCallInstruction>(hlo_for_lmhlo.at(op)));
     }
     if (call.getCallTargetName() == "SliceToDynamic") {
       return EmitSliceToDynamic(op);
@@ -4559,9 +4593,23 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
           return EmitNcclAsyncDone(Thunk::kNcclReduceScatterDone, instr);
         case HloOpcode::kAllToAll:
           return EmitNcclAsyncDone(Thunk::kNcclAllToAllDone, instr);
-        default:
+        default: {
+          if (wrapped->has_backend_config()) {
+            TF_ASSIGN_OR_RETURN(
+                xla::gpu::GpuBackendConfig gpu_config,
+                wrapped->backend_config<xla::gpu::GpuBackendConfig>());
+            if (gpu_config.operation_queue_id() != 0) {
+              // If there an async-done instruction that wraps an instruction
+              // that runs on a non-default stream, then we will
+              // just emit syncOnStreamThunk().
+              return EmitWaitForStreamsThunk(instr, gpu_config,
+                                             /*is_async_done=*/true);
+            }
+          }
+
           return Internal("Unsupported async done wrapped instruction: %s",
                           HloOpcodeString(wrapped->opcode()));
+        }
       }
     }
     case HloOpcode::kAsyncStart: {
@@ -4579,9 +4627,26 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
           return EmitNcclThunk<NcclAllToAllStartThunk, HloAllToAllInstruction>(
               Thunk::kNcclAllToAll, instr, all_to_all, std::nullopt);
         }
-        default:
+        default: {
+          if (wrapped->has_backend_config()) {
+            TF_ASSIGN_OR_RETURN(
+                xla::gpu::GpuBackendConfig gpu_config,
+                wrapped->backend_config<xla::gpu::GpuBackendConfig>());
+            if (gpu_config.operation_queue_id() != 0) {
+              // If there an async instruction that wraps an instruction
+              // that runs on a non-default stream, then we will
+              // emit syncOnStreamThunk(source=execution_stream,
+              //                        wait_on=main_compute_stream)
+              // then the thunk of wrapped instruction.
+              TF_RETURN_IF_ERROR(
+                  EmitWaitForStreamsThunk(instr, gpu_config,
+                                          /*is_async_done=*/false));
+              return EmitHloInstruction(wrapped);
+            }
+          }
           return Internal("Unsupported async start wrapped instruction: %s",
                           HloOpcodeString(wrapped->opcode()));
+        }
       }
     }
 
@@ -4636,6 +4701,9 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
         return EmitCubDeviceRadixSort(custom_call);
       }
 #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+      if (custom_call->custom_call_target() == "PadToStatic") {
+        return EmitPadToStatic(custom_call);
+      }
       return EmitCustomCallThunk(custom_call);
     }
     case HloOpcode::kFusion: {
