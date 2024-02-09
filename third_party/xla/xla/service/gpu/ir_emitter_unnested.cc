@@ -630,25 +630,25 @@ absl::Status IrEmitterUnnested::EmitPadToStatic(
 
 // Input = {dynamic array(with dynamic dimension meta data at the end)}
 // Output = {static array, dynamic_dim0, dynamic_dim1}
-absl::Status IrEmitterUnnested::EmitSliceToDynamic(mlir::Operation* op) {
+absl::Status IrEmitterUnnested::EmitSliceToDynamic(
+    const HloCustomCallInstruction* instr) {
   // TODO(jurahul): Create an op to represent SliceToDynamic.
-  auto slice_to_dynamic = mlir::cast<mlir::lmhlo::CustomCallOp>(op);
   int unroll_factor = 1;
-  std::string ir_name = GetIrNameFromLoc(slice_to_dynamic.getLoc());
+  std::string ir_name = std::string(instr->name());
 
-  const Shape& input_shape = GetShape(slice_to_dynamic.getArgs().front());
+  const Shape& input_shape = instr->operand(0)->shape();
 
   LaunchDimensions launch_dimensions = CalculateLaunchDimensions(
       input_shape, ir_emitter_context_->gpu_device_info(), {unroll_factor});
-  llvm::Type* index_ty = GetIndexTypeForKernel(
-      slice_to_dynamic, launch_dimensions.launch_bound(), &b_);
+  llvm::Type* index_ty =
+      GetIndexTypeForKernel(instr, launch_dimensions.launch_bound(), &b_);
   std::vector<llvm_ir::IrArray> input_arrays, output_arrays;
-  TF_ASSIGN_OR_RETURN(
-      std::tie(input_arrays, output_arrays),
-      BuildKernelThunkForNonFusionOp(slice_to_dynamic, launch_dimensions));
+  TF_ASSIGN_OR_RETURN(std::tie(input_arrays, output_arrays),
+                      BuildKernelThunkForNonFusionOp(instr, instr->operands(),
+                                                     launch_dimensions));
 
-  TF_RET_CHECK(slice_to_dynamic.getOutput().size() == 1);
-  const Shape& data_shape = GetShape(slice_to_dynamic.getOutput().front());
+  const Shape& data_shape = ShapeUtil::MakeStaticShape(instr->shape());
+  TF_RET_CHECK(data_shape.IsArray());
 
   // TODO(jurahul): data_shape here is the static shape of the output (which has
   // a dynamic shape in XLA). Currently, we are mapping that to a static shaped
@@ -670,7 +670,7 @@ absl::Status IrEmitterUnnested::EmitSliceToDynamic(mlir::Operation* op) {
   // Load dynamic dimensions from memory.
   std::vector<llvm::Value*> dynamic_dims;
   int alignment = raw_data_size % sizeof(int32_t);
-  for (int64_t i = 1; i < slice_to_dynamic.getArgs().size(); ++i) {
+  for (int64_t i = 1; i < instr->operand_count(); ++i) {
     llvm::Value* source_buffer = input_arrays[i].GetBasePointer();
     llvm::Type* source_buffer_pointee_type =
         input_arrays[i].GetBasePointeeType();
@@ -687,7 +687,7 @@ absl::Status IrEmitterUnnested::EmitSliceToDynamic(mlir::Operation* op) {
   //     *dyn_dim1_size = *output[2];
   //   }
   KernelSupportLibrary{&b_}.If("is_thread_0", IsBlock0Thread0(&b_), [&] {
-    for (int64_t i = 1; i < slice_to_dynamic.getArgs().size(); ++i) {
+    for (int64_t i = 1; i < instr->operand_count(); ++i) {
       const int64_t dim_index = i - 1;
       llvm::Value* metadata = b_.CreateConstInBoundsGEP1_32(
           b_.getInt8Ty(), dest_buffer,
@@ -1434,6 +1434,92 @@ absl::Status IrEmitterUnnested::EmitNormThunk(mlir::Operation* op) {
 
   AddThunkToThunkSequence(std::move(thunk));
 
+  return absl::OkStatus();
+}
+
+absl::Status IrEmitterUnnested::EmitFusedMHAThunk(
+    const HloCustomCallInstruction* instr) {
+  const HloInstruction* lhs_bmm1 = instr->operand(0);
+  const HloInstruction* rhs_bmm1 = instr->operand(1);
+  const HloInstruction* rhs_bmm2 = instr->operand(2);
+
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice lhs_bmm1_slice,
+                      GetAllocationSliceForHlo(lhs_bmm1));
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice rhs_bmm1_slice,
+                      GetAllocationSliceForHlo(rhs_bmm1));
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice rhs_bmm2_slice,
+                      GetAllocationSliceForHlo(rhs_bmm2));
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice output_slice,
+                      GetAllocationSliceForHlo(instr, {0}));
+  TF_ASSIGN_OR_RETURN(BufferAllocation::Slice scratch_slice,
+                      GetAllocationSliceForHlo(instr, {1}));
+  BufferAllocation::Slice activation_slice;
+  bool has_activation = xla::ShapeUtil::TupleElementCount(instr->shape()) == 3;
+  if (has_activation) {
+    TF_ASSIGN_OR_RETURN(activation_slice, GetAllocationSliceForHlo(instr, {2}));
+  }
+
+  TF_ASSIGN_OR_RETURN(const xla::gpu::CudnnfMHAKind kind,
+                      xla::gpu::GetCudnnfMHAKind(instr));
+  BufferAllocation::Slice mask_slice, bias_slice;
+  std::optional<Shape> mask_shape, bias_shape;
+  {
+    bool has_mask = kind == CudnnfMHAKind::kScaleMaskSoftmax ||
+                    kind == CudnnfMHAKind::kScaleMaskSoftmaxDropout ||
+                    kind == CudnnfMHAKind::kScaleBiasMaskSoftmax ||
+                    kind == CudnnfMHAKind::kScaleBiasMaskSoftmaxDropout;
+    bool has_bias = kind == CudnnfMHAKind::kScaleBiasMaskSoftmax ||
+                    kind == CudnnfMHAKind::kScaleBiasSoftmaxDropout ||
+                    kind == CudnnfMHAKind::kScaleBiasSoftmax ||
+                    kind == CudnnfMHAKind::kScaleBiasSoftmaxDropout;
+
+    if (has_mask) {
+      const HloInstruction* mask = instr->operand(3);
+      TF_ASSIGN_OR_RETURN(mask_slice, GetAllocationSliceForHlo(mask));
+      mask_shape = mask->shape();
+      if (has_bias) {
+        const HloInstruction* bias = instr->operand(4);
+        TF_ASSIGN_OR_RETURN(bias_slice, GetAllocationSliceForHlo(bias));
+        bias_shape = bias->shape();
+      }
+    } else if (has_bias) {
+      const HloInstruction* bias = instr->operand(3);
+      TF_ASSIGN_OR_RETURN(bias_slice, GetAllocationSliceForHlo(bias));
+      bias_shape = bias->shape();
+    }
+  }
+
+  TF_ASSIGN_OR_RETURN(const auto gpu_config,
+                      instr->backend_config<xla::gpu::GpuBackendConfig>());
+  const xla::gpu::CudnnfMHABackendConfig& config =
+      gpu_config.cudnn_fmha_backend_config();
+  Shape intermediate_tensor_shape(config.intermediate_tensor_shape());
+  absl::InlinedVector<Shape, 2> output_shapes = {
+      ShapeUtil::GetSubshape(instr->shape(), {0})};
+  if (has_activation) {
+    output_shapes.push_back(ShapeUtil::GetSubshape(instr->shape(), {2}));
+  }
+
+  GpufMHADescriptor descriptor = {kind,
+                                  config,
+                                  config.is_flash_attention(),
+                                  config.is_causal_mask(),
+                                  lhs_bmm1->shape(),
+                                  rhs_bmm1->shape(),
+                                  rhs_bmm2->shape(),
+                                  intermediate_tensor_shape,
+                                  output_shapes,
+                                  config.bmm1_dot_dimension_numbers(),
+                                  config.bmm2_dot_dimension_numbers(),
+                                  mask_shape,
+                                  bias_shape};
+
+  TF_ASSIGN_OR_RETURN(GpufMHAConfig fmha_config,
+                      GpufMHAConfig::For(descriptor));
+  AddThunkToThunkSequence(std::make_unique<FusedMHAThunk>(
+      Thunk::ThunkInfo::WithProfileAnnotation(instr), std::move(fmha_config),
+      lhs_bmm1_slice, rhs_bmm1_slice, rhs_bmm2_slice, output_slice,
+      scratch_slice, mask_slice, bias_slice, activation_slice));
   return absl::OkStatus();
 }
 
@@ -4230,7 +4316,8 @@ absl::Status IrEmitterUnnested::EmitOp(
           Cast<HloCustomCallInstruction>(hlo_for_lmhlo.at(op)));
     }
     if (call.getCallTargetName() == "SliceToDynamic") {
-      return EmitSliceToDynamic(op);
+      return EmitSliceToDynamic(
+          Cast<HloCustomCallInstruction>(hlo_for_lmhlo.at(op)));
     }
     const llvm::StringRef call_target = call.getCallTargetName();
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
@@ -4291,6 +4378,10 @@ absl::Status IrEmitterUnnested::EmitOp(
     return EmitNormThunk(op);
   }
   if (mlir::isa<mlir::lmhlo_gpu::fusedMHAOp>(op)) {
+    if (ir_emitter_context_->emit_ir_from_hlo()) {
+      const auto* instr = Cast<HloCustomCallInstruction>(hlo_for_lmhlo.at(op));
+      return EmitFusedMHAThunk(instr);
+    }
     return EmitFusedMHAThunk(op);
   }
   if (mlir::isa<mlir::lmhlo_gpu::fusedMHABackwardOp>(op)) {
@@ -4683,6 +4774,9 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
       if (IsCustomCallToDnnNorm(*instr)) {
         return EmitNormThunk(custom_call);
       }
+      if (IsFwdCustomCallTofMHA(*instr)) {
+        return EmitFusedMHAThunk(custom_call);
+      }
 #endif  // GOOGLE_CUDA
       if (IsCustomCallToTopK(*instr)) {
         return EmitTopKCustomCall(custom_call);
@@ -4703,6 +4797,9 @@ absl::Status IrEmitterUnnested::EmitHloInstruction(
 #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
       if (custom_call->custom_call_target() == "PadToStatic") {
         return EmitPadToStatic(custom_call);
+      }
+      if (instr->custom_call_target() == "SliceToDynamic") {
+        return EmitSliceToDynamic(custom_call);
       }
       return EmitCustomCallThunk(custom_call);
     }

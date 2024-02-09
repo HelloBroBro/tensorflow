@@ -166,6 +166,7 @@ class IrEmitterUnnested : public IrEmitter {
   absl::Status EmitNormThunk(mlir::Operation* op);
   absl::Status EmitNormThunk(const HloCustomCallInstruction* instr);
   absl::Status EmitFusedMHAThunk(mlir::Operation* op);
+  absl::Status EmitFusedMHAThunk(const HloCustomCallInstruction* instr);
   absl::Status EmitFusedMHABackwardThunk(mlir::Operation* op);
 #endif  // GOOGLE_CUDA
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
@@ -385,7 +386,7 @@ class IrEmitterUnnested : public IrEmitter {
   //   return;
   // }
   //   ```
-  absl::Status EmitSliceToDynamic(mlir::Operation* op);
+  absl::Status EmitSliceToDynamic(const HloCustomCallInstruction* instr);
 
   absl::StatusOr<BufferAllocation::Slice> GetAllocationSlice(mlir::Value v);
   absl::StatusOr<std::vector<BufferAllocation::Slice>> GetAllocationSlices(

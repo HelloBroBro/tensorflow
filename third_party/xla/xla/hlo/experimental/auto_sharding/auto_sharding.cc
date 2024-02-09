@@ -1707,10 +1707,12 @@ AutoShardingSolverResult CallSolver(
   int num_nodes_without_default = 0;
   for (NodeIdx node_idx = 0; node_idx < request.num_nodes(); ++node_idx) {
     const StrategyGroup* strategy_group = strategy_groups[node_idx];
-    auto instruction_name =
-        instructions.at(strategy_group->instruction_id)->name();
+    const auto instruction = instructions.at(strategy_group->instruction_id);
+    const auto instruction_name = instruction->name();
+    const auto opcode = HloOpcodeString(instruction->opcode());
     request.add_instruction_names(
         absl::StrCat(instruction_name, " (id: ", node_idx, ")"));
+    request.add_opcodes(std::string(opcode));
     AutoShardingSolverRequest_Costs ci, di, mi, pi;
     AutoShardingSolverRequest_Names strategy_names;
     std::optional<HloSharding> default_strategy;
@@ -1938,7 +1940,9 @@ void SetHloSharding(const HloInstructionSequence& sequence,
   const std::vector<HloInstruction*>& instructions = sequence.instructions();
 
   for (HloInstruction* inst : instructions) {
-    if (inst->opcode() == HloOpcode::kOutfeed) {
+    if (inst->opcode() == HloOpcode::kOutfeed ||
+        inst->opcode() == HloOpcode::kSend ||
+        inst->opcode() == HloOpcode::kSendDone) {
       continue;
     }
     auto iter = strategy_map.find(inst);
@@ -2083,11 +2087,17 @@ Status SetHloShardingPostProcessing(
                                       device_mesh, resharding_cache);
         }
       }
-    } else if (inst->opcode() == HloOpcode::kOutfeed) {
-      // Outfeed operand shardings are handled in downstream passes and so we
-      // ignore outfeed ops here. However, we need to ensure that outfeed ops
-      // which have user shardings have their shardings restored at the end. If
-      // not, this can lead to errors downstream in the spmd_partitioner pass.
+    } else if (inst->opcode() == HloOpcode::kOutfeed ||
+               inst->opcode() == HloOpcode::kSendDone) {
+      // Outfeed: Outfeed operand shardings are handled in downstream passes and
+      // so we ignore outfeed ops here. However, we need to ensure that outfeed
+      // ops which have user shardings have their shardings restored at the
+      // end. If not, this can lead to errors downstream in the spmd_partitioner
+      // pass.
+
+      // In the analysis itself, we use replicated strategies as a stand-in for
+      // the (expected) maximal sharding annotations that send-done ops usually
+      // have. Here we restore these maximal shardings if present.
       auto preserved_sharding_iter = preserve_shardings->find(inst->name());
       if (preserved_sharding_iter != preserve_shardings->end()) {
         const auto& preserved_sharding = preserved_sharding_iter->second;
@@ -2109,7 +2119,22 @@ Status SetHloShardingPostProcessing(
           inst->set_sharding(preserved_sharding.at(0));
         }
       }
-
+      continue;
+    } else if (inst->opcode() == HloOpcode::kSend) {
+      // In the analysis itself, we use replicated strategies as a stand-in for
+      // the (expected) maximal sharding annotations that send ops usually
+      // have. Here we restore these maximal shardings if present.
+      auto preserved_sharding_iter = preserve_shardings->find(inst->name());
+      if (preserved_sharding_iter != preserve_shardings->end()) {
+        const auto& preserved_sharding = preserved_sharding_iter->second;
+        if (preserved_sharding.size() > 1) {
+          inst->set_sharding(
+              HloSharding::Tuple(inst->shape(), preserved_sharding));
+        } else {
+          CHECK_EQ(preserved_sharding.size(), 1);
+          inst->set_sharding(preserved_sharding[0]);
+        }
+      }
       continue;
     } else {
       if (inst->shape().IsTuple()) {
@@ -3209,7 +3234,9 @@ AutoShardingImplementation::SaveAndRemoveShardingAnnotation(
   for (const HloComputation* computation :
        module->computations(execution_threads)) {
     for (const auto inst : computation->instructions()) {
-      if (inst->opcode() == HloOpcode::kOutfeed) {
+      if (inst->opcode() == HloOpcode::kOutfeed ||
+          inst->opcode() == HloOpcode::kSend ||
+          inst->opcode() == HloOpcode::kSendDone) {
         spmd::SaveShardingForInstruction(inst,
                                          /* save_for_copy_users */ false,
                                          preserve_shardings);
@@ -3262,6 +3289,12 @@ AutoShardingImplementation::SaveAndRemoveShardingAnnotation(
 
       if (ins->opcode() == HloOpcode::kCopy &&
           keep_inst.find(ins->operand(0)) != keep_inst.end()) {
+        continue;
+      }
+
+      if (ins->opcode() == HloOpcode::kOutfeed ||
+          ins->opcode() == HloOpcode::kSend ||
+          ins->opcode() == HloOpcode::kSendDone) {
         continue;
       }
 
