@@ -5897,6 +5897,7 @@ xla_cc_test(
     deps = [
         ":convert_memory_placement_to_internal_annotations",
         "//xla:statusor",
+        "//xla:util",
         "//xla:xla_data_proto_cc",
         "//xla/tests:hlo_test_base",
         "//xla/tests:xla_internal_test_main",
@@ -5919,6 +5920,7 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:statusor",
     ],
@@ -7571,7 +7573,10 @@ xla_cc_test(
     name = "xla_aot_compile_cpu_test",
     srcs = ["xla_aot_compile_cpu_test.cc"],
     data = [":xla_aot_compile_test_cpu_executable"],
-    tags = ["no_oss"],
+    tags = [
+        "no_oss",
+        "notap",
+    ],
     deps = [
         ":cpu_plugin",
         ":platform_util",
