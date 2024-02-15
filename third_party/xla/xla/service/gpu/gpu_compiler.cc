@@ -297,6 +297,11 @@ class MaybeOwningThreadPool {
     int default_parallelism) {
   CHECK_GE(parallelism, 0);
   CHECK_GE(default_parallelism, 1);
+  // CurrentThreadId() returns -1 if the current thread does not belong to the
+  // thread pool. If the current thread belongs to the thread pool, we should
+  // not be using it, because it can potentially cause deadlocks.
+  CHECK(default_thread_pool == nullptr ||
+        default_thread_pool->CurrentThreadId() == -1);
 
   auto create_thread_pool = [&](int num_threads) {
     CHECK_GE(num_threads, 1);
@@ -2123,8 +2128,9 @@ absl::Status GpuCompiler::RunPostSchedulingPipelines(
     constexpr int toolkit_version = TF_ROCM_VERSION;
 #endif
     pipeline.AddPass<CommandBufferScheduling>(
-        gpu_device_info.gpu_compute_capability(), toolkit_version,
+        gpu_device_info, toolkit_version,
         driver_version.value_or(toolkit_version));
+    pipeline.AddPass<GpuSanitizeConstantNames>();
     TF_RETURN_IF_ERROR(pipeline.Run(module).status());
   }
 

@@ -2605,6 +2605,7 @@ xla_cc_test(
     name = "logistic_expander_test",
     srcs = ["logistic_expander_test.cc"],
     deps = [
+        ":dynamic_padder",
         ":hlo_creation_utils",
         ":hlo_parser",
         ":hlo_pass",
@@ -2615,6 +2616,7 @@ xla_cc_test(
         ":shape_inference",
         "//xla:literal",
         "//xla:shape_util",
+        "//xla:statusor",
         "//xla:test",
         "//xla:types",
         "//xla:window_util",
@@ -5978,6 +5980,7 @@ cc_library(
 xla_cc_test(
     name = "host_offloader_test",
     srcs = ["host_offloader_test.cc"],
+    shard_count = 12,
     deps = [
         ":host_memory_offload_annotations_hdr",
         ":host_offloader",
@@ -6650,6 +6653,17 @@ cc_library(
     srcs = ["custom_call_target_registry.cc"],
     hdrs = ["custom_call_target_registry.h"],
     visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "custom_call_target_registry_test",
+    srcs = ["custom_call_target_registry_test.cc"],
+    deps = [
+        ":custom_call_status",
+        ":custom_call_target_registry",
+        "//xla:test",
+        "@local_tsl//tsl/platform:test_main",
+    ],
 )
 
 # Exposes the public interface only and hides internal details. Suitable for
