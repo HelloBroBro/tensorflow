@@ -19,8 +19,8 @@ limitations under the License.
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
-#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/time/time.h"
@@ -43,6 +43,27 @@ limitations under the License.
 
 namespace xla {
 namespace gpu {
+namespace {
+
+std::vector<const HloInstruction*> GetUniqueFusionOperands(
+    const HloInstruction* producer, const HloInstruction* consumer) {
+  std::vector<const HloInstruction*> fusion_operands;
+  for (const HloInstruction* operand : producer->operands()) {
+    fusion_operands.push_back(operand);
+  }
+  for (const HloInstruction* operand : consumer->operands()) {
+    if (operand != producer) {
+      fusion_operands.push_back(operand);
+    }
+  }
+  std::sort(fusion_operands.begin(), fusion_operands.end());
+  fusion_operands.erase(
+      std::unique(fusion_operands.begin(), fusion_operands.end()),
+      fusion_operands.end());
+  return fusion_operands;
+}
+
+}  // namespace
 
 /*static*/ EstimateRunTimeData
 GpuPerformanceModel::EstimateRunTimeForInstruction(
@@ -73,30 +94,19 @@ GpuPerformanceModel::EstimateRunTimeForInstruction(
   absl::Duration compute_time = ComputeTime(*device_info, flops, num_threads);
 
   CoalescingAnalysis coalescing_analysis(
-      instr, fusion_analysis.GetEmitterFusionKind());
+      instr, instr->operands(), fusion_analysis.GetEmitterFusionKind());
 
   absl::Duration read_time;
   for (const auto [operand_id, operand] : llvm::enumerate(instr->operands())) {
-    auto element_type = operand->shape().element_type();
-    // Information about data read taking into account utilization.
-    // If `operand_utilization` is 0, `operand_bytes_accessed` should be also 0.
+    int64_t operand_size = cost_analysis->GetShapeSize(operand->shape());
     int64_t n_bytes_total =
-        cost_analysis->operand_bytes_accessed(*instr, operand_id);
-    float operand_utilization =
-        cost_analysis->operand_utilization(*instr, operand_id);
-
-    // An estimate how much data would need to fit into L1/L2 cache to speed up
-    // the operand access.
-    // If `operand_utilization` < 1, only a part of the full operand size should
-    // be read. Otherwise, `n_bytes_total / operand_utilization` is the
-    // size of the operand without reuse.
-    int64_t n_bytes_net =
-        std::llround(n_bytes_total / std::max(operand_utilization, 1.0f));
+        GetOperandBytesAccessed(cost_analysis, instr, operand);
+    int64_t n_bytes_net = std::min(operand_size, n_bytes_total);
 
     bool coalesced = coalescing_analysis.IsReadCoalesced(operand);
-    read_time +=
-        ReadTimeWithDRAMHeuristic(*device_info, num_blocks, n_bytes_net,
-                                  n_bytes_total, element_type, coalesced);
+    read_time += ReadTimeWithDRAMHeuristic(
+        *device_info, num_blocks, n_bytes_net, n_bytes_total,
+        operand->shape().element_type(), coalesced);
   }
 
   absl::Duration write_time = WriteTime(*device_info, bytes_written);
@@ -218,26 +228,18 @@ absl::Duration GpuPerformanceModel::EstimateUnfusedExecTime(
   absl::Duration compute_time =
       ComputeTime(*device_info, fused_flops, num_threads);
 
-  absl::flat_hash_set<const HloInstruction*> fusion_operands;
-  for (auto* operand : producer->operands()) {
-    fusion_operands.insert(operand);
-  }
-  for (auto* operand : consumer->operands()) {
-    if (operand != producer) {
-      fusion_operands.insert(operand);
-    }
-  }
+  std::vector<const HloInstruction*> fusion_operands =
+      GetUniqueFusionOperands(producer, consumer);
   CoalescingAnalysis coalescing_analysis(
-      producer, consumer, fusion_analysis.GetEmitterFusionKind());
+      producer, consumer, fusion_operands,
+      fusion_analysis.GetEmitterFusionKind());
 
   absl::Duration read_time;
   for (const auto* operand : fusion_operands) {
-    float operand_utilization =
-        GetSharedUtilization(cost_analysis, producer, consumer, operand);
-
     int64_t operand_size = cost_analysis->GetShapeSize(operand->shape());
 
-    int64_t n_bytes_total = std::llround(operand_size * operand_utilization);
+    int64_t n_bytes_total = GetSharedOperandBytesAccessed(
+        cost_analysis, producer, consumer, operand);
     int64_t n_bytes_net = std::min(operand_size, n_bytes_total);
 
     bool coalesced = coalescing_analysis.IsReadCoalesced(operand);

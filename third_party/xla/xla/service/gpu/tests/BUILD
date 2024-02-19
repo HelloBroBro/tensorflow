@@ -84,6 +84,17 @@ xla_cc_test(
     ],
 )
 
+xla_test(
+    name = "float_conversions_test",
+    srcs = ["float_conversions_test.cc"],
+    backends = ["gpu"],
+    deps = [
+        ":gpu_codegen_test",
+        "@local_tsl//tsl/platform:test",
+        "@local_tsl//tsl/platform:test_main",
+    ],
+)
+
 xla_cc_test(
     name = "gpu_reduce_scatter_creator_test",
     srcs = ["gpu_reduce_scatter_creator_test.cc"],
@@ -657,14 +668,11 @@ lit_test_suite(
         [
             "add_preds.hlo",
             "calling_convention.hlo",
-            "concat.hlo",
             "copy.hlo",
             "dynamic_update_slice_inplace.hlo",
             "element_wise_row_vectorization.hlo",
             "fused_scatter.hlo",
-            "fused_slice_different_operands.hlo",
             "fused_slice.hlo",
-            "fusion.hlo",
             "kernel_reuse.hlo",
             "launch_dimensions.hlo",
             "pad_to_static.hlo",
