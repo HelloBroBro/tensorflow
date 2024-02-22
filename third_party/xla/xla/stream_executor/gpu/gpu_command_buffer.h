@@ -20,6 +20,7 @@ limitations under the License.
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -78,6 +79,14 @@ class GpuCommandBuffer : public CommandBuffer {
 
   absl::Status Barrier(StreamExecutor* executor,
                        ExecutionScopeId execution_scope_id) override;
+
+  absl::Status Barrier(
+      StreamExecutor* executor,
+      absl::Span<const ExecutionScopeId> execution_scope_ids) override;
+
+  absl::Status Barrier(StreamExecutor* executor,
+                       ExecutionScopeId from_execution_scope_id,
+                       ExecutionScopeId to_execution_scope_id) override;
 
   absl::Status Launch(const ThreadDim& threads, const BlockDim& blocks,
                       const Kernel& kernel, const KernelArgs& args) override;
@@ -209,12 +218,6 @@ class GpuCommandBuffer : public CommandBuffer {
   // For each conditional node in the Gpu graph we keep a record of conditional
   // command buffers attached to a node, so we can apply updates to them.
   struct ConditionalCommandBuffers {
-    ConditionalCommandBuffers(
-        std::vector<GpuGraphConditionalHandle> handles,
-        std::vector<std::unique_ptr<GpuCommandBuffer>> command_buffers)
-        : handles(std::move(handles)),
-          command_buffers(std::move(command_buffers)) {}
-
     std::vector<GpuGraphConditionalHandle> handles;
     std::vector<std::unique_ptr<GpuCommandBuffer>> command_buffers;
   };
@@ -243,7 +246,7 @@ class GpuCommandBuffer : public CommandBuffer {
       SetConditionFn set_condition,
       absl::Span<const ConditionBuilder> builders);
 
-  Dependencies GetBarrier();
+  Dependencies GetBarrier(ExecutionScopeId execution_scope_id);
 
   // Returns loaded auxiliary kernels, or loads them on a given stream executor.
   // Loaded kernels owned by a current command buffer.
@@ -278,6 +281,13 @@ class GpuCommandBuffer : public CommandBuffer {
   // one, otherwise returns internal error.
   absl::Status CheckNumCommandBuffers(
       const ConditionalCommandBuffers& cmd_buffers, size_t num_cmd_buffers);
+
+  // Creates a new no-op node acting as a barrier.
+  absl::StatusOr<GpuGraphNodeHandle> CreateBarrierNode(
+      StreamExecutor* executor, const Dependencies& dependencies);
+
+  // Collects a set of dependencies for a new barrier.
+  Dependencies GetBarrierDependencies(ExecutionScopeId execution_scope_id);
 
   static_assert(std::is_pointer_v<GpuGraphHandle>,
                 "GpuGraphHandle must be a pointer");
@@ -354,16 +364,15 @@ class GpuCommandBuffer : public CommandBuffer {
 // empty nodes are not supported within conditional CUDA graphs (in CUDA 12.3).
 void* GetNoOpKernel();
 
-// See `cuda_conditional_kernels.cu.cc` for CUDA implementations. These are
+// See `cuda_conditional_kernels.cc` for CUDA implementation. These are
 // various kernels that update Gpu conditionals based on the device memory
 // values, and allow implementing on-device control flow via conditional command
 // buffers.
-
-void* GetSetIfConditionKernel();
-void* GetSetIfElseConditionKernel();
-void* GetSetCaseConditionKernel();
-void* GetSetForConditionKernel();
-void* GetSetWhileConditionKernel();
+std::string_view GetSetIfConditionKernel();
+std::string_view GetSetIfElseConditionKernel();
+std::string_view GetSetCaseConditionKernel();
+std::string_view GetSetForConditionKernel();
+std::string_view GetSetWhileConditionKernel();
 
 }  // namespace stream_executor::gpu
 
