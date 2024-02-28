@@ -22,7 +22,6 @@ limitations under the License.
 #include <optional>
 #include <set>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -53,7 +52,9 @@ limitations under the License.
 #include "pybind11/numpy.h"  // from @pybind11
 #include "pybind11/pybind11.h"  // from @pybind11
 #include "pybind11/pytypes.h"  // from @pybind11
+#include "pybind11/stl.h"  // from @pybind11
 #include "pybind11/stl_bind.h"  // from @pybind11
+#include "pybind11_abseil/absl_casters.h"  // from @pybind11_abseil
 #include "xla/layout_util.h"
 #include "xla/pjrt/distributed/client.h"
 #include "xla/pjrt/distributed/distributed.h"
@@ -461,7 +462,7 @@ static void Init(py::module_& m) {
              PjRtClient::HostBufferSemantics::kImmutableUntilTransferCompletes)
       .value("ZERO_COPY", PjRtClient::HostBufferSemantics::kZeroCopy);
 
-  jax::BuildWeakrefLRUCacheAPI(m);
+  jax::BuildWeakrefLRUCacheAPI(m_nb);
 
   py::class_<PyClient, std::shared_ptr<PyClient>> py_local_client(m, "Client");
   py_local_client.def_property_readonly("platform", &PyClient::platform_name)
@@ -827,7 +828,17 @@ static void Init(py::module_& m) {
            })
       .def("cost_analysis",
            xla::ValueOrThrowWrapper(&PyLoadedExecutable::GetCostAnalysis))
-      .def_property_readonly("traceback", &PyLoadedExecutable::traceback)
+      .def_property_readonly(
+          "traceback",
+          // TODO(phawkins): just use &PyLoadedExecutable::traceback when
+          // nanobind port is complete.
+          [](PyLoadedExecutable* e) -> py::object {
+            if (e->traceback()) {
+              return py::reinterpret_borrow<py::object>(e->traceback()->ptr());
+            } else {
+              return py::none();
+            }
+          })
       .def_property_readonly("fingerprint",
                              [](PyLoadedExecutable* exec) -> py::object {
                                if (exec->fingerprint().has_value()) {
@@ -869,7 +880,7 @@ static void Init(py::module_& m) {
           return xla::ValueOrThrow(
               CudaArrayInterfaceToBuffer(cai, std::move(cuda_client)));
         });
-  BuildProfilerSubmodule(&m);
+  BuildProfilerSubmodule(m_nb);
   BuildOpsSubmodule(&m);
   BuildOutfeedReceiverSubmodule(&m);
   BuildPytreeSubmodule(m_nb);
@@ -877,7 +888,7 @@ static void Init(py::module_& m) {
   jax::BuildPmapSubmodule(m);
   jax::BuildPjitSubmodule(m);
   jax::BuildTransferGuardSubmodule(m);
-  BuildTracebackSubmodule(m);
+  BuildTracebackSubmodule(m_nb);
   BuildMlirSubmodule(m);
   BuildCustomCallShardingPybindAPI(m);
 
