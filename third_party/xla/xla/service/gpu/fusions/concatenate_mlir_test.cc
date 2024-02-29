@@ -39,7 +39,7 @@ class MlirConcatenateFusionTest : public MlirEmitterTestBase {
 };
 
 TEST_F(MlirConcatenateFusionTest, StandAloneConcatenate) {
-  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnVerifiedModule(R"(
+  auto kHloString = R"(
     HloModule module
 
   fused_computation {
@@ -53,16 +53,59 @@ TEST_F(MlirConcatenateFusionTest, StandAloneConcatenate) {
     param1 = f32[128] parameter(1)
     ROOT fusion = f32[256] fusion(param0, param1), calls=fused_computation, kind=kLoop
   }
-  )"));
+  )";
 
-  auto* root = module->entry_computation()->root_instruction();
-  auto analysis = AnalyzeFusion(*root, device_info_);
-
-  // TODO: Add support for parameter operands.
-  EXPECT_FALSE(MlirConcatenateFusion::IsSupported(analysis));
+  EXPECT_TRUE(RunAndCompareNoHloPasses(kHloString, ErrorSpec{1e-3}));
 }
 
-TEST_F(MlirConcatenateFusionTest, ConcatenateElementwise) {
+TEST_F(MlirConcatenateFusionTest, PrologueEpilogue) {
+  auto kHloString = R"(
+    HloModule module
+
+  fused_computation {
+    param0 = f32[128] parameter(0)
+    param1 = f32[128] parameter(1)
+    log = f32[128] log(param0)
+    exp = f32[128] exponential(param1)
+    concat = f32[256] concatenate(log, exp), dimensions={0}
+    ROOT neg = f32[256] negate(concat)
+  }
+
+  ENTRY main {
+    param0 = f32[128] parameter(0)
+    param1 = f32[128] parameter(1)
+    ROOT fusion = f32[256] fusion(param0, param1), calls=fused_computation, kind=kLoop
+  }
+  )";
+
+  TF_ASSERT_OK_AND_ASSIGN(auto ir, EmitIR(kHloString));
+
+  ASSERT_TRUE(RunFileCheck(ir, R"(
+// CHECK-LABEL: fused_computation
+// CHECK: %[[C_128:.*]] = arith.constant 128
+// CHECK: %[[THREAD_ID:.*]] = gpu.thread_id x
+
+// CHECK: %[[VAL_1_1:.*]] = xla_gpu.pure_call @fused_computation_log({{.*}}, %[[THREAD_ID]])
+// CHECK: %[[VAL_1_2:.*]] = xla_gpu.pure_call @fused_computation_neg({{.*}}, %[[THREAD_ID]], %[[VAL_1_1]])
+// CHECK: %[[INSERTED_1:.*]] = tensor.insert %[[VAL_1_2:.*]] into {{.*}}[%[[THREAD_ID]]]
+
+// CHECK: %[[VAL_2_1:.*]] = xla_gpu.pure_call @fused_computation_exp({{.*}}, %[[THREAD_ID]])
+// CHECK: %[[INDEX_2:.*]] = arith.addi %[[THREAD_ID]], %[[C_128]]
+// CHECK: %[[VAL_2_2:.*]] = xla_gpu.pure_call @fused_computation_neg({{.*}}, %[[INDEX_2]], %[[VAL_2_1]])
+// CHECK: %[[INSERTED_2:.*]] = tensor.insert %[[VAL_2_2:.*]] into {{.*}}[%[[INDEX_2]]]
+
+// CHECK: return %[[INSERTED_2]]
+
+// CHECK: func.func private @fused_computation_log
+// CHECK: func.func private @fused_computation_exp
+// CHECK: func.func private @fused_computation_neg
+)")
+                  .value());
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(kHloString, ErrorSpec{1e-3}));
+}
+
+TEST_F(MlirConcatenateFusionTest, Prologue) {
   auto kHloString = R"(
     HloModule module
 
@@ -86,12 +129,12 @@ TEST_F(MlirConcatenateFusionTest, ConcatenateElementwise) {
   ASSERT_TRUE(RunFileCheck(ir, R"(
 // CHECK-LABEL: fused_computation
 // CHECK:       %[[C_128:.*]] = arith.constant 128
-
 // CHECK:       %[[THREAD_ID:.*]] = gpu.thread_id x
-// CHECK:       %[[VAL_1:.*]] = call @fused_computation_log({{.*}}, %[[THREAD_ID]])
+
+// CHECK:       %[[VAL_1:.*]] = xla_gpu.pure_call @fused_computation_log({{.*}}, %[[THREAD_ID]])
 // CHECK:       %[[INSERTED_1:.*]] = tensor.insert %[[VAL_1:.*]] into {{.*}}[%[[THREAD_ID]]]
 
-// CHECK:       %[[VAL_2:.*]] = call @fused_computation_exp({{.*}}, %[[THREAD_ID]])
+// CHECK:       %[[VAL_2:.*]] = xla_gpu.pure_call @fused_computation_exp({{.*}}, %[[THREAD_ID]])
 // CHECK:       %[[INDEX_2:.*]] = arith.addi %[[THREAD_ID]], %[[C_128]]
 // CHECK:       %[[INSERTED_2:.*]] = tensor.insert %[[VAL_2:.*]] into {{.*}}[%[[INDEX_2]]]
 
@@ -101,6 +144,26 @@ TEST_F(MlirConcatenateFusionTest, ConcatenateElementwise) {
 // CHECK: func.func private @fused_computation_exp
 )")
                   .value());
+
+  EXPECT_TRUE(RunAndCompareNoHloPasses(kHloString, ErrorSpec{1e-3}));
+}
+
+TEST_F(MlirConcatenateFusionTest, MajorDimension) {
+  auto kHloString = R"(
+  HloModule module
+
+  fused_computation {
+    param0 = f32[16,16] parameter(0)
+    param1 = f32[16,16] parameter(1)
+    ROOT concat = f32[32,16] concatenate(param0, param1), dimensions={0}
+  }
+
+  ENTRY main {
+    param0 = f32[16,16] parameter(0)
+    param1 = f32[16,16] parameter(1)
+    ROOT %fusion = f32[32,16] fusion(param0, param1), kind=kInput, calls=fused_computation
+  }
+  )";
 
   EXPECT_TRUE(RunAndCompareNoHloPasses(kHloString, ErrorSpec{1e-3}));
 }
