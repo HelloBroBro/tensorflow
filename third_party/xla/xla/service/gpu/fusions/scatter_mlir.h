@@ -12,39 +12,40 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-#ifndef XLA_SERVICE_GPU_FUSIONS_INPUT_SLICES_MLIR_H_
-#define XLA_SERVICE_GPU_FUSIONS_INPUT_SLICES_MLIR_H_
+#ifndef XLA_SERVICE_GPU_FUSIONS_SCATTER_MLIR_H_
+#define XLA_SERVICE_GPU_FUSIONS_SCATTER_MLIR_H_
 
 #include <cstdint>
 #include <optional>
 
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
+#include "mlir/Interfaces/DataLayoutInterfaces.h"  // from @llvm-project
 #include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/service/gpu/fusions/loop.h"
 #include "xla/service/gpu/fusions/mlir/mlir_fusion_emitter.h"
 #include "xla/service/gpu/hlo_fusion_analysis.h"
 #include "xla/service/gpu/launch_dimensions.h"
+#include "xla/service/gpu/model/indexing_map.h"
 #include "xla/status.h"
 
 namespace xla {
 namespace gpu {
 
-// Generates code for input-fusible slices. Lowers to LLVM via MLIR.
-class MlirInputSlicesFusion : public MlirFusionEmitterBase {
+// Generic loop fusion. Lowers to LLVM via MLIR.
+class MlirScatterFusion : public MlirFusionEmitterBase {
  public:
-  explicit MlirInputSlicesFusion(const HloFusionAnalysis& analysis)
-      : analysis_(analysis),
-        unroll_factor_(analysis.input_output_info().has_4_bit_output ? 2 : 1) {}
+  explicit MlirScatterFusion(const HloFusionAnalysis& analysis)
+      : analysis_(analysis), config_(ComputeLoopFusionConfig(analysis)) {}
   LaunchDimensions launch_dimensions() const override;
 
+  static bool IsSupported(const HloFusionAnalysis& analysis) { return false; }
+
   std::optional<IndexingMap> ComputeThreadIdToOutputIndexing(
-      int64_t output_id, mlir::MLIRContext* ctx) const override;
+      int64_t root_index, mlir::MLIRContext* ctx) const override;
 
   std::optional<IndexingMap> ComputeThreadIdToInputIndexing(
       int64_t root_index, int64_t hero_operand_index,
-      mlir::MLIRContext* ctx) const override {
-    // TODO(b/319081342): Implement this.
-    return std::nullopt;
-  }
+      mlir::MLIRContext* ctx) const override;
 
  protected:
   absl::Status EmitEntryFunction(
@@ -55,10 +56,10 @@ class MlirInputSlicesFusion : public MlirFusionEmitterBase {
 
  private:
   const HloFusionAnalysis& analysis_;
-  const int unroll_factor_;
+  LaunchDimensionsConfig config_;
 };
 
 }  // namespace gpu
 }  // namespace xla
 
-#endif  // XLA_SERVICE_GPU_FUSIONS_INPUT_SLICES_MLIR_H_
+#endif  // XLA_SERVICE_GPU_FUSIONS_SCATTER_MLIR_H_
