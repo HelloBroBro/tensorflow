@@ -104,6 +104,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.add_xla_gpu_enable_command_buffer(DebugOptions::FUSION);
   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUBLAS);
   opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUSTOM_CALL);
+  opts.add_xla_gpu_enable_command_buffer(DebugOptions::CUDNN);
   opts.set_xla_gpu_graph_num_runs_to_instantiate(-1);
   opts.set_xla_gpu_graph_min_graph_size(5);
   opts.set_xla_gpu_graph_enable_concurrent_region(false);
@@ -230,6 +231,7 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_enable_dot_strength_reduction(true);
 
   opts.set_xla_gpu_enable_bf16_6way_gemm(false);
+  opts.set_xla_gpu_enable_bf16_3way_gemm(false);
   opts.set_xla_gpu_nccl_collective_max_nchannels(0);
   opts.set_xla_gpu_nccl_p2p_max_nchannels(0);
 
@@ -1570,6 +1572,16 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       bool_setter_for(&DebugOptions::set_xla_gpu_enable_dot_strength_reduction),
       debug_options->xla_gpu_enable_dot_strength_reduction(),
       "Enable rewriting matmuls with a vector into reductions."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_enable_bf16_6way_gemm",
+      bool_setter_for(&DebugOptions::set_xla_gpu_enable_bf16_6way_gemm),
+      debug_options->xla_gpu_enable_bf16_6way_gemm(),
+      "Use BF16 6way gemm to compute F32 gemm."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_enable_bf16_3way_gemm",
+      bool_setter_for(&DebugOptions::set_xla_gpu_enable_bf16_3way_gemm),
+      debug_options->xla_gpu_enable_bf16_3way_gemm(),
+      "Use BF16 3way gemm to compute F32 gemm."));
   flag_list->push_back(
       tsl::Flag("xla_gpu_nccl_collective_max_nchannels",
                 int64_setter_for(
