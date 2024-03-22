@@ -13,27 +13,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "xla/service/gpu/model/indexing_context.h"
+#ifndef XLA_STREAM_EXECUTOR_GPU_GPU_TIMER_KERNEL_H_
+#define XLA_STREAM_EXECUTOR_GPU_GPU_TIMER_KERNEL_H_
 
-#include <utility>
+namespace stream_executor::gpu {
+enum struct GpuSemaphoreState { Hold, Release, TimedOut };
+namespace delay_kernel {
+void* kernel();  // returns a pointer to a CUDA C++ device function
+}  // namespace delay_kernel
+}  // namespace stream_executor::gpu
 
-#include "xla/service/gpu/model/indexing_map.h"
-
-namespace xla {
-namespace gpu {
-
-static RTVarID rt_var_count = 0;
-
-RTVar IndexingContext::RegisterRTVar(RTVarData rt_var_data) {
-  rt_vars_registry_.insert(std::make_pair(rt_var_count, rt_var_data));
-  return RTVar{rt_var_count++};
-}
-
-RTVarData& IndexingContext::GetRTVarData(RTVarID id) {
-  return rt_vars_registry_.at(id);
-}
-
-/*static*/ void IndexingContext::ResetRTVarStateForTests() { rt_var_count = 0; }
-
-}  // namespace gpu
-}  // namespace xla
+#endif  // XLA_STREAM_EXECUTOR_GPU_GPU_TIMER_KERNEL_H_
