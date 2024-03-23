@@ -69,7 +69,6 @@ limitations under the License.
 #include "xla/service/gpu/fusions/mlir/ir/xla_gpu_ops.h"
 #include "xla/service/gpu/hlo_traversal.h"
 #include "xla/service/gpu/model/indexing_analysis.h"
-#include "xla/service/gpu/model/indexing_context.h"
 #include "xla/service/gpu/model/indexing_map.h"
 #include "xla/shape_util.h"
 #include "xla/status_macros.h"
@@ -89,6 +88,7 @@ using mlir::Block;
 using mlir::ImplicitLocOpBuilder;
 using mlir::IRMapping;
 using mlir::Location;
+using mlir::MLIRContext;
 using mlir::OpBuilder;
 using mlir::Value;
 using mlir::ValueRange;
@@ -162,8 +162,7 @@ static auto& kUnsupportedOps =
                                         HloOpcode::kCall};
 
 static auto& kUnimplementedOps = *new absl::flat_hash_set<HloOpcode>{
-    HloOpcode::kConvolution, HloOpcode::kDot, HloOpcode::kMap,
-    HloOpcode::kReduceWindow};
+    HloOpcode::kConvolution, HloOpcode::kDot, HloOpcode::kMap};
 
 bool IsUnsupportedConstant(const HloInstruction* instr) {
   return instr->opcode() == HloOpcode::kConstant &&
@@ -251,9 +250,9 @@ absl::StatusOr<SmallVector<Value>> EmitReduce(
     const HloInstruction* instr, ValueRange indices,
     const OperandProvider& operand_provider,
     const CallTargetProvider& call_target_provider, ImplicitLocOpBuilder& b) {
-  IndexingContext indexing_context{b.getContext()};
+  auto* mlir_context = b.getContext();
   HloInstructionIndexing indexing =
-      ComputeOutputToInputIndexing(instr, 0, &indexing_context);
+      ComputeOutputToInputIndexing(instr, 0, mlir_context);
   const auto& indexing_map = *indexing.indexing_maps[0].begin();
 
   SmallVector<Value> init_values;
@@ -288,6 +287,67 @@ absl::StatusOr<SmallVector<Value>> EmitReduce(
                          element_mlir_type, args.back())
                         .getResult(0);
     }
+    auto reducer = call_target_provider(
+        instr->called_computations().front()->root_instruction());
+    return b.create<mlir::func::CallOp>(reducer, args).getResults();
+  };
+
+  TF_ASSIGN_OR_RETURN(
+      auto result,
+      EmitLoopNestWithStatus(b, indices, init_values, indexing_map, body));
+
+  return ConvertToSignless(result, b);
+}
+
+absl::StatusOr<SmallVector<Value>> EmitReduceWindow(
+    const HloInstruction* instr, mlir::Type result_element_type,
+    ValueRange indices, const OperandProvider& operand_provider,
+    const CallTargetProvider& call_target_provider, ImplicitLocOpBuilder& b) {
+  MLIRContext* mlir_context = b.getContext();
+  HloInstructionIndexing indexing =
+      ComputeOutputToInputIndexing(instr, 0, mlir_context);
+  const auto& indexing_map = *indexing.indexing_maps[0].begin();
+
+  auto reduce_window = DynCast<HloReduceWindowInstruction>(instr);
+  CHECK(reduce_window != nullptr);
+
+  SmallVector<Value> init_values;
+  for (auto [index, init_value] :
+       llvm::enumerate(reduce_window->init_values())) {
+    TF_ASSIGN_OR_RETURN(
+        init_values.emplace_back(),
+        GetSingleOperandValue(operand_provider, instr,
+                              reduce_window->input_count() + index, {}));
+    // Convert back to signed type.
+    TF_ASSIGN_OR_RETURN(
+        auto element_mlir_type,
+        ConvertPrimitiveTypeToMlirType(init_value->shape().element_type(), b));
+    init_values.back() = b.create<mlir::UnrealizedConversionCastOp>(
+                              element_mlir_type, init_values.back())
+                             .getResult(0);
+  }
+
+  auto body =
+      [&](ValueRange iter_args, ValueRange dim_values,
+          ValueRange symbol_values) -> absl::StatusOr<SmallVector<Value>> {
+    auto indices = ApplyAffineMap(indexing_map.GetAffineMap(), dim_values,
+                                  symbol_values, b);
+
+    SmallVector<Value> args{iter_args};
+    for (auto [index, input] : llvm::enumerate(reduce_window->inputs())) {
+      TF_ASSIGN_OR_RETURN(
+          args.emplace_back(),
+          GetSingleOperandValue(operand_provider, instr, index, indices));
+
+      // Convert back to signed type.
+      TF_ASSIGN_OR_RETURN(
+          auto element_mlir_type,
+          ConvertPrimitiveTypeToMlirType(input->shape().element_type(), b));
+      args.back() = b.create<mlir::UnrealizedConversionCastOp>(
+                         element_mlir_type, args.back())
+                        .getResult(0);
+    }
+
     auto reducer = call_target_provider(
         instr->called_computations().front()->root_instruction());
     return b.create<mlir::func::CallOp>(reducer, args).getResults();
@@ -469,8 +529,7 @@ absl::StatusOr<SmallVector<Value>> EmitPad(
     const HloInstruction* instr, mlir::Type result_element_type,
     ValueRange indices, const OperandProvider& operand_provider,
     ImplicitLocOpBuilder& b) {
-  IndexingContext indexing_context{b.getContext()};
-  auto indexing = ComputeOutputToInputIndexing(instr, 0, &indexing_context);
+  auto indexing = ComputeOutputToInputIndexing(instr, 0, b.getContext());
   const auto& indexing_map = *indexing.indexing_maps[0].begin();
   mlir::Value is_in_bounds = CheckConstraints(indexing_map, indices, {}, b);
 
@@ -608,7 +667,7 @@ absl::StatusOr<SmallVector<Value>> HloToMlir(
     result_element_type = sign_converter.convertType(element_mlir_type);
   }
 
-  IndexingContext indexing_context(builder.getContext());
+  auto* mlir_context = builder.getContext();
   // Handle ops that aren't elementwise and aren't just indexing
   // transformations.
   switch (instr->opcode()) {
@@ -649,6 +708,9 @@ absl::StatusOr<SmallVector<Value>> HloToMlir(
     case HloOpcode::kReduce:
       return EmitReduce(instr, indices, operand_provider, call_target_provider,
                         builder);
+    case HloOpcode::kReduceWindow:
+      return EmitReduceWindow(instr, result_element_type, indices,
+                              operand_provider, call_target_provider, builder);
     case HloOpcode::kTuple: {
       CHECK(!IsUnsupportedTuple(instr));
       const auto& first_shape = instr->shape().tuple_shapes(0);
@@ -662,7 +724,7 @@ absl::StatusOr<SmallVector<Value>> HloToMlir(
         if (i > 0 && !ShapeUtil::EqualIgnoringElementType(
                          first_shape, instr->operand(i)->shape())) {
           auto operand_map = GetBitcastMap(
-              first_shape, instr->operand(i)->shape(), &indexing_context);
+              first_shape, instr->operand(i)->shape(), mlir_context);
           operand_indices =
               ApplyAffineMap(operand_map.GetAffineMap(), indices, {}, builder);
         } else {
@@ -693,9 +755,8 @@ absl::StatusOr<SmallVector<Value>> HloToMlir(
                             operand->shape().element_type(), builder));
     arg_types.push_back(operand_element_type);
   }
-  auto input_indices =
-      GetInputIndices(ComputeOutputToInputIndexing(instr, 0, &indexing_context),
-                      indices, builder);
+  auto input_indices = GetInputIndices(
+      ComputeOutputToInputIndexing(instr, 0, mlir_context), indices, builder);
   SmallVector<Value> operands;
   for (auto&& [operand_number, operand_indices] :
        llvm::enumerate(input_indices)) {

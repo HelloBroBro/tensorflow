@@ -300,7 +300,6 @@ cc_library(
         "//xla/hlo/ir:hlo",
         "//xla/service:buffer_assignment",
         "//xla/service:name_uniquer",
-        "//xla/service/gpu/model:indexing_map",
         "//xla/stream_executor:device_description",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -1401,6 +1400,7 @@ cc_library(
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:MemRefDialect",
+        "@llvm-project//mlir:SideEffectInterfaces",
         "@llvm-project//mlir:Support",
         "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:ml_dtypes",
@@ -1629,6 +1629,7 @@ cc_library(
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@local_tsl//tsl/platform:errors",
+        "@local_tsl//tsl/platform:statusor",
     ],
 )
 
