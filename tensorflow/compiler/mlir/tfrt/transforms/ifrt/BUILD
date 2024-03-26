@@ -51,6 +51,17 @@ cc_library(
 )
 
 cc_library(
+    name = "ifrt_types",
+    srcs = [],
+    hdrs = ["ifrt_types.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tensorflow/core:framework",
+        "//tensorflow/core:protos_all_cc",
+    ],
+)
+
+cc_library(
     name = "tf_ifrt_passes",
     srcs = [
         "lower_to_ifrt_restore_variable.cc",
@@ -59,6 +70,7 @@ cc_library(
         "tf_identity_propagation.cc",
         "tf_ifrt_passes.cc",
         "tf_restore_merging.cc",
+        "tf_restore_pruning.cc",
         "tf_restore_splitting.cc",
     ],
     hdrs = [
@@ -110,6 +122,7 @@ cc_library(
     hdrs = ["tf2hlo.h"],
     deps = [
         ":ifrt_constants",
+        ":ifrt_types",
         "//tensorflow/compiler/jit:xla_cpu_jit",
         "//tensorflow/compiler/mlir/tensorflow:dump_mlir_util",
         "//tensorflow/compiler/mlir/tensorflow:serialize_mlir_module_utils",
