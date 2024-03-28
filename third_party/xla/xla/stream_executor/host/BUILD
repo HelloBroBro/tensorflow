@@ -1,10 +1,10 @@
 # Description:
 #   Host-platform specific StreamExecutor support code.
 
-load("//xla:xla.bzl", "xla_cc_test")
-load("//xla/stream_executor:build_defs.bzl", "stream_executor_friends")
 load("@local_tsl//tsl:tsl.bzl", "internal_visibility")
 load("@local_tsl//tsl/platform:rules_cc.bzl", "cc_library")
+load("//xla:xla.bzl", "xla_cc_test")
+load("//xla/stream_executor:build_defs.bzl", "stream_executor_friends")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -73,6 +73,40 @@ cc_library(
         "@local_tsl//tsl/platform:env",
         "@local_tsl//tsl/platform:setround",
         "@local_tsl//tsl/platform:thread_annotations",
+    ],
+)
+
+cc_library(
+    name = "host_kernel_c_api",
+    hdrs = ["host_kernel_c_api.h"],
+)
+
+cc_library(
+    name = "host_kernel",
+    srcs = ["host_kernel.cc"],
+    hdrs = ["host_kernel.h"],
+    deps = [
+        ":host_kernel_c_api",
+        "//xla/stream_executor",
+        "//xla/stream_executor:device_memory",
+        "//xla/stream_executor:stream_executor_internal",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "host_kernel_test",
+    srcs = ["host_kernel_test.cc"],
+    deps = [
+        ":host_kernel",
+        ":host_kernel_c_api",
+        "//xla/stream_executor",
+        "//xla/stream_executor:device_memory",
+        "@local_tsl//tsl/lib/core:status_test_util",
+        "@local_tsl//tsl/platform:test",
+        "@local_tsl//tsl/platform:test_main",
     ],
 )
 

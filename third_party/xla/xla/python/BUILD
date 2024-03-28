@@ -1,12 +1,5 @@
-load("//xla:pytype.default.bzl", "pytype_strict_library")
-load("//xla:strict.default.bzl", "py_strict_library", "py_strict_test")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
-load(
-    "//xla:xla.bzl",
-    "xla_cc_test",
-    "xla_py_test_deps",
-)
 load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm")
 load(
     "@local_tsl//tsl:tsl.bzl",
@@ -19,6 +12,13 @@ load("@local_tsl//tsl/platform:rules_cc.bzl", "cc_library")
 load(
     "@local_tsl//tsl/platform/default:cuda_build_defs.bzl",
     "if_cuda_is_configured",
+)
+load("//xla:pytype.default.bzl", "pytype_strict_library")
+load("//xla:strict.default.bzl", "py_strict_library", "py_strict_test")
+load(
+    "//xla:xla.bzl",
+    "xla_cc_test",
+    "xla_py_test_deps",
 )
 
 package(
@@ -456,6 +456,7 @@ cc_library(
         "//third_party/nanobind",
         "//xla:comparison_util",
         "//xla/pjrt:exceptions",
+        "//xla/pjrt:host_callback",
         "//xla/service:custom_call_status",
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/strings",

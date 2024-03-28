@@ -1,3 +1,5 @@
+# buildifier: disable=out-of-order-load
+
 load("//tensorflow:strict.default.bzl", "py_strict_library")
 
 # copybara:uncomment_begin(google-only)
