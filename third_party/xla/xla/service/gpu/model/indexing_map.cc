@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/service/gpu/model/indexing_map.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <numeric>
@@ -24,6 +25,7 @@ limitations under the License.
 #include <sstream>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "absl/types/span.h"
@@ -34,6 +36,10 @@ limitations under the License.
 #include "mlir/IR/AffineMap.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "xla/hlo/ir/hlo_casting_utils.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_instructions.h"
+#include "xla/hlo/ir/hlo_opcode.h"
 #include "xla/service/gpu/model/affine_map_printer.h"
 #include "tsl/platform/logging.h"  // IWYU pragma: keep
 
@@ -945,8 +951,10 @@ IndexingMap operator*(const IndexingMap& lhs, const IndexingMap& rhs) {
 // RangeEvaluator for every constraint. Note that we start with "expr"
 // simplification, because the ranges of constraints were already optimized once
 // when IndexingMap was constructed.
-bool IndexingMap::Simplify() {
+bool IndexingMap::Simplify(IndexingMapProvider indexing_map_provider) {
   if (IsUndefined()) return false;
+
+  bool rtvars_were_eliminated = ReplaceConstantRTVars(indexing_map_provider);
 
   // Simplify constraints to shrink the lower/upper bounds of dims and symbols.
   bool constraints_were_simplified = false;
@@ -967,7 +975,8 @@ bool IndexingMap::Simplify() {
   if (affine_map_was_simplified) {
     affine_map_ = simplified_affine_map;
   }
-  return affine_map_was_simplified || constraints_were_simplified;
+  return affine_map_was_simplified || constraints_were_simplified ||
+         rtvars_were_eliminated;
 }
 
 bool IndexingMap::SimplifyConstraintExprs() {
@@ -1325,6 +1334,107 @@ bool IndexingMap::RescaleSymbols() {
 
   for (const auto& expr : to_delete) {
     constraints_.erase(expr);
+  }
+
+  return !to_delete.empty();
+}
+
+// Returns either:
+// 1. an AffineExpr if the RTVar folds entirely into a constant expression
+// 2. an updated RTVar if some partial optimization was possible
+// 3. an unchanged RTVar if no optimization was possible
+static std::variant<AffineExpr, RTVar> OptimizeRTVar(
+    RTVar rt_var, MLIRContext* mlir_context,
+    IndexingMap::IndexingMapProvider indexing_map_provider) {
+  while (true) {
+    if (auto constant_expr = DynCast<HloConstantInstruction>(rt_var.hlo)) {
+      if (rt_var.map.isConstant()) {
+        const auto idx = rt_var.map.getConstantResults();
+        return getAffineConstantExpr(
+            constant_expr->literal().GetIntegralAsS64(idx).value(),
+            mlir_context);
+      }
+      return rt_var;
+    }
+
+    if (auto iota_expr = DynCast<HloIotaInstruction>(rt_var.hlo)) {
+      auto iota_dimension = iota_expr->iota_dimension();
+      CHECK(iota_dimension < rt_var.map.getNumResults());
+      return rt_var.map.getResults()[iota_dimension];
+    }
+
+    auto is_indexing_transformation = [](const HloInstruction* instr) {
+      return instr->opcode() == HloOpcode::kBitcast ||
+             instr->opcode() == HloOpcode::kBroadcast ||
+             instr->opcode() == HloOpcode::kReshape ||
+             instr->opcode() == HloOpcode::kReverse ||
+             instr->opcode() == HloOpcode::kSlice ||
+             instr->opcode() == HloOpcode::kTranspose;
+    };
+
+    if (is_indexing_transformation(rt_var.hlo)) {
+      auto instr_indexing_map =
+          indexing_map_provider(rt_var.hlo, 0, mlir_context);
+
+      rt_var.hlo = rt_var.hlo->operand(0);
+      rt_var.map = instr_indexing_map.GetAffineMap().compose(rt_var.map);
+      continue;
+    }
+
+    return rt_var;
+  }
+}
+
+bool IndexingMap::ReplaceConstantRTVars(
+    IndexingMap::IndexingMapProvider indexing_map_provider) {
+  if (rt_vars_.empty()) return false;
+
+  std::vector<size_t> to_delete;
+
+  for (auto index = 0; index < rt_vars_.size(); ++index) {
+    auto& rt_var = rt_vars_[index];
+    auto result =
+        OptimizeRTVar(rt_var, GetMLIRContext(), indexing_map_provider);
+
+    // If we got an RTVar back, then we just replace it and move on.
+    if (std::holds_alternative<RTVar>(result)) {
+      rt_var = std::get<RTVar>(std::move(result));
+      continue;
+    }
+
+    // But if we received an AffineExpr we can eliminate the RTVar from
+    // all expressions in the indexing map.
+    auto folded_expr = std::get<AffineExpr>(std::move(result));
+
+    // range_vars and rt_vars share the symbol space, with the rt_vars coming
+    // after the range_vars.
+    auto symbol_index = range_vars_.size() + index;
+    affine_map_ = affine_map_.replace(
+        {{mlir::getAffineSymbolExpr(symbol_index, GetMLIRContext()),
+          folded_expr}});
+
+    llvm::DenseMap<AffineExpr, AffineExpr> replacements;
+
+    for (const auto& [constraint, interval] : constraints_) {
+      auto modified_constraint = constraint.replace(
+          mlir::getAffineSymbolExpr(symbol_index, GetMLIRContext()),
+          folded_expr);
+
+      if (constraint == modified_constraint) continue;
+      replacements[constraint] = modified_constraint;
+    }
+
+    for (const auto& [old_expr, new_expr] : replacements) {
+      auto interval = constraints_.at(old_expr);
+      constraints_.erase(old_expr);
+      constraints_[new_expr] = interval;
+    }
+
+    to_delete.emplace_back(index);
+  }
+
+  for (auto index : llvm::reverse(to_delete)) {
+    rt_vars_.erase(rt_vars_.begin() + index);
   }
 
   return !to_delete.empty();
