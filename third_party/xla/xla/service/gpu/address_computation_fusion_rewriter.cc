@@ -59,13 +59,20 @@ namespace {
 
 // A dataflow path flowing from a definition to a user.
 using DefUseDataflowPath = absl::InlinedVector<HloInstruction*, 2>;
+
 // All dataflow paths flowing from a definition to all users. Each user will
 // have a separate entry in the vector.
 using DefUseDataflowPaths = absl::InlinedVector<DefUseDataflowPath, 4>;
+
 // A dataflow path flowing from a user to a definition.
 using UseDefDataflowPath = absl::InlinedVector<HloInstruction*, 4>;
+
 // All dataflow paths flowing from a user to all definitions of its operands.
 using UseDefDataflowPaths = absl::InlinedVector<HloInstruction*, 8>;
+
+using DataflowPathView = absl::Span<HloInstruction* const>;
+using DataflowPathsView = absl::Span<DataflowPathView>;
+
 using InstructionSet = absl::flat_hash_set<HloInstruction*>;
 
 bool IsNoOp(const HloInstruction* hlo) {
@@ -262,7 +269,7 @@ DefUseDataflowPaths GetSlicedUserPaths(const HloInstruction* instr) {
 }
 
 absl::InlinedVector<HloInstruction*, 4> GetPatternCaptures(
-    absl::Span<HloInstruction* const> matches) {
+    DataflowPathView matches) {
   absl::InlinedVector<HloInstruction*, 4> captures;
 
   InstructionSet matched_instrs(matches.begin(), matches.end());
@@ -280,7 +287,7 @@ absl::InlinedVector<HloInstruction*, 4> GetPatternCaptures(
 }
 
 Status CreateRootTuple(HloInstruction* hero, HloComputation::Builder& builder,
-                       DefUseDataflowPaths sliced_user_paths,
+                       DataflowPathsView sliced_user_paths,
                        absl::flat_hash_map<const HloInstruction*,
                                            HloInstruction*>& instr_mapping) {
   unsigned tuple_size = hero->shape().tuple_shapes_size();
@@ -314,9 +321,8 @@ Status CreateRootTuple(HloInstruction* hero, HloComputation::Builder& builder,
 }
 
 absl::StatusOr<HloComputation*> CreateFusionBody(
-    HloModule* module, absl::Span<HloInstruction* const> sliced_operand_paths,
-    DefUseDataflowPaths sliced_user_paths,
-    absl::Span<HloInstruction* const> captures) {
+    HloModule* module, DataflowPathView sliced_operand_paths,
+    DataflowPathsView sliced_user_paths, DataflowPathView captures) {
   HloComputation::Builder builder("address-computation");
 
   // A mapping from original instructions to instructions in the fusion body.
@@ -366,9 +372,8 @@ absl::StatusOr<HloComputation*> CreateFusionBody(
 }
 
 absl::StatusOr<HloInstruction*> CreateFusionInstruction(
-    HloModule* module, HloInstruction* orig,
-    absl::Span<HloInstruction* const> captures, HloComputation* body,
-    bool dynamic) {
+    HloModule* module, HloInstruction* orig, DataflowPathView captures,
+    HloComputation* body, bool dynamic) {
   HloComputation* parent = orig->parent();
 
   // Add a fusion operation calling outlined fusion computation.
@@ -399,8 +404,6 @@ absl::StatusOr<HloInstruction*> CreateFusionInstruction(
 absl::StatusOr<bool> AddressComputationFusionRewriter::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
-  if (!module->has_schedule()) return Internal("module is not scheduled");
-
   auto process_slices = [&](bool dynamic) -> absl::StatusOr<bool> {
     absl::flat_hash_map<HloInstruction*,
                         std::pair<UseDefDataflowPaths, DefUseDataflowPaths>>
@@ -440,34 +443,32 @@ absl::StatusOr<bool> AddressComputationFusionRewriter::Run(
 
     if (matches.empty()) return false;
 
-    HloSchedule& schedule = module->schedule();
     for (auto& [hero, paths] : matches) {
       auto& [sliced_operand_paths, sliced_user_paths] = paths;
       std::vector<HloInstruction*> matched_instrs;
       absl::c_copy(sliced_operand_paths, std::back_inserter(matched_instrs));
 
-      for (auto& sliced_user_path : sliced_user_paths)
+      std::vector<DataflowPathView> sliced_user_paths_view;
+      for (auto& sliced_user_path : sliced_user_paths) {
         absl::c_copy(sliced_user_path, std::back_inserter(matched_instrs));
+        DataflowPathView sliced_user_path_view{&sliced_user_path.front(),
+                                               sliced_user_path.size()};
+        sliced_user_paths_view.push_back(std::move(sliced_user_path_view));
+      }
 
       auto captures = GetPatternCaptures(matched_instrs);
 
-      TF_ASSIGN_OR_RETURN(HloComputation * fusion_body,
-                          CreateFusionBody(module, sliced_operand_paths,
-                                           sliced_user_paths, captures));
+      TF_ASSIGN_OR_RETURN(
+          HloComputation * fusion_body,
+          CreateFusionBody(module, sliced_operand_paths,
+                           DataflowPathsView(sliced_user_paths_view),
+                           captures));
 
       TF_ASSIGN_OR_RETURN(HloInstruction * fusion,
                           CreateFusionInstruction(module, hero, captures,
                                                   fusion_body, dynamic));
 
-      // As we are running after scheduling we have to keep it valid.
       HloComputation* parent = hero->parent();
-      // Update schedule to replace the custom call instruction with the fusion
-      // instruction.
-      // Removal of the rest of the instructions in the sequence is handled by
-      // schedule update below.
-      HloInstructionSequence& sequence = schedule.GetOrCreateSequence(parent);
-      sequence.replace_instruction(hero, fusion);
-
       if (fusion->shape().IsTuple()) {
         TF_RETURN_IF_ERROR(parent->ReplaceInstructionWithDifferentShape(
             const_cast<HloInstruction*>(hero), fusion));
@@ -506,8 +507,6 @@ absl::StatusOr<bool> AddressComputationFusionRewriter::Run(
             parent->ReplaceInstruction(instr_to_be_replaced, fusion));
       }
     }
-
-    TF_RETURN_IF_ERROR(module->schedule().Update());
 
     return true;
   };
