@@ -502,6 +502,8 @@ cc_library(
     name = "ir_emitter_triton",
     srcs = if_cuda_is_configured(["ir_emitter_triton.cc"]) + if_rocm_hipblaslt([
         "ir_emitter_triton.cc",
+    ]) + if_cuda_is_configured(["ir_emitter_triton_cuda.cc"]) + if_rocm_is_configured([
+        "ir_emitter_triton_rocm.cc",
     ]),
     hdrs = if_gpu_is_configured(["ir_emitter_triton.h"]),
     deps = [
@@ -560,6 +562,7 @@ cc_library(
         "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:ArithToLLVM",
         "@llvm-project//mlir:BuiltinToLLVMIRTranslation",
+        "@llvm-project//mlir:ControlFlowToLLVM",
         "@llvm-project//mlir:ExecutionEngineUtils",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
@@ -570,6 +573,7 @@ cc_library(
         "@llvm-project//mlir:NVVMDialect",
         "@llvm-project//mlir:NVVMToLLVMIRTranslation",
         "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:ROCDLToLLVMIRTranslation",
         "@llvm-project//mlir:SCFDialect",
         "@llvm-project//mlir:SCFToControlFlow",
         "@llvm-project//mlir:Support",
@@ -607,7 +611,6 @@ xla_test(
     deps = [
         ":backend_configs_cc",
         ":gpu_device_info_for_tests",
-        ":ir_emission_utils",
         ":ir_emitter_triton",
         ":matmul_utils",
         ":triton_fusion_analysis",
@@ -620,7 +623,6 @@ xla_test(
         "//xla/hlo/ir:hlo",
         "//xla/service:pattern_matcher",
         "//xla/service:pattern_matcher_gmock",
-        "//xla/service/gpu/model:indexing_test_utils",
         "//xla/service/gpu/tests:gpu_codegen_test",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor/cuda:cublas_plugin",
@@ -3692,6 +3694,7 @@ xla_test(
     name = "gpu_compiler_test",
     srcs = if_gpu_is_configured(["gpu_compiler_test.cc"]),
     backends = ["gpu"],
+    data = ["gpu_compiler_test_autotune_db.textproto"],
     deps = [
         ":gpu_compiler",
         ":gpu_hlo_schedule",
@@ -3705,6 +3708,7 @@ xla_test(
         "//xla/service:pattern_matcher",
         "//xla/service:pattern_matcher_gmock",
         "//xla/service:xla_debug_info_manager",
+        "//xla/service/gpu:autotuner_util",
         "//xla/tests:hlo_test_base",
         "//xla/tests:xla_internal_test_main",
         "@com_google_absl//absl/log",
@@ -3714,7 +3718,9 @@ xla_test(
         "@com_google_googletest//:gtest",
         "@local_tsl//tsl/lib/core:status_test_util",
         "@local_tsl//tsl/platform:env",
+        "@local_tsl//tsl/platform:path",
         "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/platform:test",
     ],
 )
 
