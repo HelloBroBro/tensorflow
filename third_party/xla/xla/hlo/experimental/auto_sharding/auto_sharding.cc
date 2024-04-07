@@ -1825,9 +1825,9 @@ AutoShardingSolverResult CallSolver(
     const LivenessEdgeSet& liveness_edge_set, const StrategyMap& strategy_map,
     const StrategyGroups& strategy_groups, const CostGraph& cost_graph,
     const AliasSet& alias_set, const std::vector<NodeStrategyIdx>& s_hint,
-    const bool compute_iis, const int64_t solver_timeout_in_seconds,
-    const AutoShardingOption& option, std::optional<double> max_cost,
-    absl::string_view request_name,
+    const absl::flat_hash_set<LivenessIdx>& peak_times, const bool compute_iis,
+    const int64_t solver_timeout_in_seconds, const AutoShardingOption& option,
+    std::optional<double> max_cost, absl::string_view request_name,
     const absl::flat_hash_map<std::string, const HloInstruction*>&
         sharding_propagation_solution,
     bool deterministic_mode) {
@@ -1841,6 +1841,7 @@ AutoShardingSolverResult CallSolver(
   request.mutable_s_follow()->Add(cost_graph.follow_idx_.begin(),
                                   cost_graph.follow_idx_.end());
   request.mutable_s_hint()->Add(s_hint.begin(), s_hint.end());
+  request.mutable_peak_times()->Add(peak_times.begin(), peak_times.end());
   request.mutable_solver_timeout()->set_solver_timeout_in_seconds(
       solver_timeout_in_seconds);
   request.mutable_overbudget_coeff()->set_coeff(kOverbudgetCoeff);
@@ -2112,6 +2113,8 @@ void SetHloSharding(const HloInstructionSequence& sequence,
 
   for (HloInstruction* inst : instructions) {
     if (inst->opcode() == HloOpcode::kOutfeed ||
+        inst->opcode() == HloOpcode::kRecv ||
+        inst->opcode() == HloOpcode::kRecvDone ||
         inst->opcode() == HloOpcode::kSend ||
         inst->opcode() == HloOpcode::kSendDone) {
       continue;
@@ -2271,7 +2274,8 @@ Status SetHloShardingPostProcessing(
       // have. Here we restore these maximal shardings if present.
       auto preserved_sharding_iter = preserve_shardings.find(inst->name());
       if (preserved_sharding_iter != preserve_shardings.end()) {
-        const auto& preserved_sharding = preserved_sharding_iter->second;
+        const std::vector<HloSharding>& preserved_sharding =
+            preserved_sharding_iter->second;
         if (preserved_sharding.size() > 1) {
           std::vector<Shape> tuple_elements_shape(
               inst->operand(0)->shape().tuple_shapes().begin(),
@@ -2282,27 +2286,36 @@ Status SetHloShardingPostProcessing(
           ShapeTree<HloSharding> output_tuple_sharding(
               output_tuple_sharding_shape, Undefined());
           size_t i = 0;
-          for (auto& leaf : output_tuple_sharding.leaves()) {
+          for (std::pair<ShapeIndex, HloSharding>& leaf :
+               output_tuple_sharding.leaves()) {
             leaf.second = preserved_sharding.at(i++);
           }
           inst->set_sharding(HloSharding::Tuple(output_tuple_sharding));
         } else {
-          inst->set_sharding(preserved_sharding.at(0));
+          CHECK_EQ(preserved_sharding.size(), 1);  // Crash OK
+          inst->set_sharding(preserved_sharding[0]);
         }
       }
       continue;
-    } else if (inst->opcode() == HloOpcode::kSend) {
+    } else if (inst->opcode() == HloOpcode::kSend ||
+               inst->opcode() == HloOpcode::kRecv ||
+               inst->opcode() == HloOpcode::kRecvDone) {
       // In the analysis itself, we use replicated strategies as a stand-in for
       // the (expected) maximal sharding annotations that send ops usually
       // have. Here we restore these maximal shardings if present.
       auto preserved_sharding_iter = preserve_shardings.find(inst->name());
       if (preserved_sharding_iter != preserve_shardings.end()) {
-        const auto& preserved_sharding = preserved_sharding_iter->second;
+        const std::vector<HloSharding>& preserved_sharding =
+            preserved_sharding_iter->second;
         if (preserved_sharding.size() > 1) {
           inst->set_sharding(
               HloSharding::Tuple(inst->shape(), preserved_sharding));
         } else {
-          CHECK_EQ(preserved_sharding.size(), 1);
+          if (preserved_sharding.size() != 1) {
+            return absl::InternalError(absl::StrCat(
+                "An empty sharding was preserved for ", inst->name(),
+                ". This should be reported as a bug."));
+          }
           inst->set_sharding(preserved_sharding[0]);
         }
       }
@@ -3450,6 +3463,8 @@ AutoShardingImplementation::SaveAndRemoveShardingAnnotation(
        module->computations(execution_threads)) {
     for (const auto inst : computation->instructions()) {
       if (inst->opcode() == HloOpcode::kOutfeed ||
+          inst->opcode() == HloOpcode::kRecv ||
+          inst->opcode() == HloOpcode::kRecvDone ||
           inst->opcode() == HloOpcode::kSend ||
           inst->opcode() == HloOpcode::kSendDone) {
         spmd::SaveShardingForInstruction(inst,
@@ -3985,6 +4000,8 @@ absl::StatusOr<bool> AutoSharding::Run(
   metrics::RecordAutoShardingInvocations();
 #endif
 
+  TF_RETURN_IF_ERROR(module->RemoveUnusedComputations());
+
   TF_RETURN_IF_ERROR(option_.CheckAndSetup());
   LOG(INFO) << "AutoShardingOptions:\n" << option_.ToString();
 
@@ -4158,12 +4175,25 @@ absl::StatusOr<bool> AutoSharding::Run(
                 << " which had the minimal solver objective value of "
                 << min_objective_value;
         chosen_mesh_shape_ = mesh_shapes[min_mesh_shape_index];
+        TF_RETURN_IF_ERROR(
+            modules[min_mesh_shape_index]->RemoveUnusedComputations());
+        const std::vector<HloComputation*>& original_module_computations =
+            module->MakeComputationSorted();
+        const std::vector<HloComputation*>& clone_module_computations =
+            modules[min_mesh_shape_index]->MakeComputationSorted();
+        if (original_module_computations.size() !=
+            clone_module_computations.size()) {
+          return absl::InternalError(
+              "The cloned and the original modules do not have the same number "
+              "of computations. This is a bug and should be reported.");
+        }
+
         absl::flat_hash_map<HloComputation*, HloComputation*>
             computation_replacements;
-        for (size_t i = 0; i < module->computation_count(); ++i) {
-          auto original_computation = module->mutable_computation(i);
-          auto new_computation =
-              modules[min_mesh_shape_index]->mutable_computation(i);
+        for (size_t i = 0; i < original_module_computations.size(); ++i) {
+          HloComputation* original_computation =
+              original_module_computations[i];
+          HloComputation* new_computation = clone_module_computations[i];
           computation_replacements[original_computation] = new_computation;
         }
 
