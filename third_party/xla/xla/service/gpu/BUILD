@@ -10,15 +10,6 @@ load(
     "rocm_copts",
 )
 load(
-    "@local_tsl//tsl:tsl.bzl",
-    "if_google",
-    "if_nccl",
-    "internal_visibility",
-    "tsl_copts",
-    "tsl_gpu_library",
-)
-load("@local_tsl//tsl:tsl.default.bzl", "filegroup", "get_compatible_with_portable")
-load(
     "@local_tsl//tsl/platform:build_config.bzl",
     "tf_proto_library",
 )
@@ -44,6 +35,15 @@ load(
     "if_gpu_is_configured",
 )
 load("//xla/tests:build_defs.bzl", "xla_test")
+load(
+    "//xla/tsl:tsl.bzl",
+    "if_google",
+    "if_nccl",
+    "internal_visibility",
+    "tsl_copts",
+    "tsl_gpu_library",
+)
+load("//xla/tsl:tsl.default.bzl", "filegroup", "get_compatible_with_portable")
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
@@ -538,6 +538,7 @@ cc_library(
         "//xla/service/gpu/model:indexing_map",
         "//xla/service/gpu/model:symbolic_tile_analysis",
         "//xla/service/gpu/model:symbolic_tiled_hlo_instruction",
+        "//xla/service/gpu/model:tiled_hlo_instruction",
         "//xla/service/llvm_ir:llvm_util",
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:launch_dim",
@@ -1254,7 +1255,7 @@ cc_library(
         "@local_tsl//tsl/platform:logging",
     ] + if_cuda_is_configured([
         ":gpu_asm_opts_util",
-        "//xla/stream_executor/gpu:asm_compiler",
+        "//xla/stream_executor/cuda:cuda_asm_compiler",
     ]),
 )
 
@@ -3885,6 +3886,7 @@ cc_library(
         "//xla/service/llvm_ir:llvm_util",
         "//xla/stream_executor",
         "//xla/stream_executor:stream_executor_headers",
+        "//xla/stream_executor/cuda:cuda_asm_compiler",
         "//xla/stream_executor/cuda:cuda_diagnostics",
         "//xla/stream_executor/cuda:cuda_platform_id",
         "//xla/stream_executor/cuda:ptx_compiler",
@@ -3915,6 +3917,7 @@ xla_test(
         "gpu_a100",
     ],
     tags = [
+        "no_rocm",
         "nomsan",  # Pulls in precompiled NVIDIA libraries which cause false positives in msan.
     ],
     deps = [
