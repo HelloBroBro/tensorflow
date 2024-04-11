@@ -38,7 +38,6 @@ load("//xla/tests:build_defs.bzl", "xla_test")
 load(
     "//xla/tsl:tsl.bzl",
     "if_google",
-    "if_nccl",
     "internal_visibility",
     "tsl_copts",
     "tsl_gpu_library",
@@ -589,14 +588,15 @@ cc_library(
         "@local_tsl//tsl/platform:tensor_float_32_utils",
         "@triton//:TritonDialects",
         "@triton//:TritonTransforms",
-    ] + if_cuda_is_configured([
+    ] + if_gpu_is_configured([
+        "@triton//:TritonNvidiaGPUTransforms",
+        "@triton//:TritonGPUToLLVM",
+        "@triton//:TritonToTritonGPU",
+    ]) + if_cuda_is_configured([
         "@triton//third_party/nvidia:NVGPUToLLVM",
         "@triton//third_party/nvidia:TritonNVIDIAGPUToLLVM",
         "@triton//:TritonGPUTransforms",
-        "@triton//:TritonNvidiaGPUTransforms",
         "@triton//:TritonLLVMIR",
-        "@triton//:TritonToTritonGPU",
-        "@triton//:TritonGPUToLLVM",
     ]),
 )
 
@@ -905,165 +905,6 @@ cuda_library(
     srcs = if_cuda_is_configured(["sleep_kernel.cu.cc"]),
     hdrs = if_cuda_is_configured(["sleep_kernel.h"]),
     deps = ["@local_config_cuda//cuda:cuda_headers"],
-)
-
-cc_library(
-    name = "mock_nccl_xml_google",
-    srcs = ["mock_nccl_xml.cc"],
-    hdrs = ["mock_nccl_xml.h"],
-    local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]) + if_rocm_is_configured([
-        "TENSORFLOW_USE_ROCM=1",
-    ]),
-    tags = ["manual"],
-    visibility = ["//visibility:private"],
-    deps = [
-        "//xla:status",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@com_google_absl//absl/log:check",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/strings:string_view",
-        "@com_google_absl//absl/types:span",
-        "@local_tsl//tsl/platform:errors",
-        "@local_tsl//tsl/platform:regexp",
-    ] + if_cuda_is_configured([
-        "@local_config_nccl//:nccl",
-    ]) + if_rocm_is_configured([
-        "@local_config_rocm//rocm:rccl",
-    ]),
-)
-
-xla_cc_test(
-    name = "mock_nccl_xml_test",
-    size = "small",
-    srcs = if_google(["mock_nccl_xml_test.cc"]),
-    local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]) + if_rocm_is_configured([
-        "TENSORFLOW_USE_ROCM=1",
-    ]),
-    tags = tf_cuda_tests_tags(),
-    deps = [
-        "//xla:status",
-        "@com_google_googletest//:gtest_main",
-        "@local_tsl//tsl/platform:test",
-    ] + if_google([
-        ":mock_nccl_xml_google",
-    ]) + if_cuda_is_configured([
-        "@local_config_nccl//:nccl",
-    ]) + if_rocm_is_configured([
-        "@local_config_rocm//rocm:rccl",
-    ]),
-)
-
-# Empty library to implement nested dependency conditions.
-cc_library(
-    name = "empty",
-    compatible_with = get_compatible_with_portable(),
-)
-
-alias(
-    name = "mock_nccl_utils",
-    actual = if_nccl(
-        if_google(":_mock_nccl_utils_google", ":_mock_nccl_utils_default"),
-        ":empty",
-    ),
-)
-
-# Do not build mock_nccl_utils.cc in OSS. It uses the nccl internal cost model to estimate the
-# communication time of nccl collective calls. Only build it in Google builds.
-# TODO(b/306073484): Stub out the cost model api used in mock nccl functions.
-cc_library(
-    name = "_mock_nccl_utils_google",
-    srcs = if_cuda_is_configured(["mock_nccl_utils.cc"]),
-    hdrs = if_cuda_is_configured([
-        "mock_nccl_utils.h",
-        "mock_nccl_topo_config.h",
-    ]),
-    # Override tsl_gpu_library()'s internal default value of ["//buildenv/target:gce"].
-    compatible_with = [],
-    tags = ["manual"],
-    visibility = ["//visibility:private"],
-    deps = if_cuda_is_configured([
-        ":gpu_executable_run_options",
-        ":mock_nccl_xml_google",
-        ":nccl_clique_key",
-        ":sleep_kernel",
-        "@com_google_absl//absl/algorithm:container",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/container:node_hash_map",
-        "@com_google_absl//absl/log",
-        "@com_google_absl//absl/log:check",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/synchronization",
-        "@com_google_absl//absl/time",
-        "@com_google_absl//absl/types:span",
-        "@local_config_cuda//cuda:cuda_headers",
-        "@local_config_nccl//:nccl",
-        "//xla:debug_options_flags",
-        "//xla:executable_run_options",
-        "//xla:shape_util",
-        "//xla:status",
-        "//xla:status_macros",
-        "//xla:statusor",
-        "//xla:util",
-        "//xla/service:collective_ops_utils",
-        "//xla/service:global_device_id",
-        "//xla/service:rendezvous",
-        "//xla/service:lockable",
-        "//xla/service/gpu/runtime:nccl_api",
-        "//xla/service/gpu/runtime:nccl_clique",
-        "//xla/service/gpu/runtime:nccl_collective_thunk",
-        "//xla/service/gpu/runtime:nccl_p2p_thunk_common",
-        "//xla/service/gpu/runtime:thunk",
-        "//xla/stream_executor",
-        "//xla/stream_executor/gpu:gpu_activation",
-        "//xla/stream_executor/gpu:gpu_stream",
-        "//xla/stream_executor/gpu:gpu_types_header",
-        "@local_tsl//tsl/platform:env",
-        "@local_tsl//tsl/lib/gtl:int_type",
-        "@local_tsl//tsl/platform:errors",
-        "@local_tsl//tsl/platform:statusor",
-    ]),
-)
-
-cc_library(
-    name = "_mock_nccl_utils_default",
-    srcs = if_gpu_is_configured(["mock_nccl_utils_default.cc"]),
-    hdrs = if_gpu_is_configured(["mock_nccl_utils.h"]),
-    # Override tsl_gpu_library()'s internal default value of ["//buildenv/target:gce"].
-    compatible_with = [],
-    tags = ["manual"],
-    visibility = ["//visibility:private"],
-    deps = if_gpu_is_configured([
-        ":gpu_executable_run_options",
-        ":nccl_clique_key",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/strings:string_view",
-        "//xla:executable_run_options",
-        "//xla:status",
-        "//xla:statusor",
-        "//xla:util",
-        "//xla/service/gpu/runtime:nccl_api",
-        "//xla/service/gpu/runtime:nccl_clique",
-        "//xla/service/gpu/runtime:nccl_collective_thunk",
-        "//xla/service/gpu/runtime:nccl_p2p_thunk_common",
-        "//xla/service/gpu/runtime:thunk",
-        "//xla/service:collective_ops_utils",
-        "//xla/service:global_device_id",
-        "//xla/service:lockable",
-        "//xla/stream_executor",
-        "@local_tsl//tsl/lib/gtl:int_type",
-    ]) + if_cuda_is_configured([
-        "@local_config_nccl//:nccl",
-    ]) + if_rocm_is_configured([
-        "@local_config_rocm//rocm:rccl",
-    ]),
 )
 
 # TODO(b/244780257): Remove this config.
@@ -2070,8 +1911,10 @@ cc_library(
         "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:logging",
         "@local_tsl//tsl/platform:numbers",
+        "//xla/tsl/util:env_var",
         "@local_tsl//tsl/platform:statusor",
         "//xla/tsl/util/proto:proto_utils",
+        "@local_tsl//tsl/platform:status",
     ]),
 )
 
@@ -2499,13 +2342,14 @@ cc_library(
     srcs = ["priority_fusion.cc"],
     hdrs = ["priority_fusion.h"],
     deps = [
+        ":backend_configs_cc",
         ":fusion_process_dump_proto_cc",
         ":gpu_fusible",
         ":hlo_fusion_analysis",
         ":hlo_traversal",
+        ":triton_fusion_analysis",
         "//xla:debug_options_flags",
         "//xla:shape_util",
-        "//xla:statusor",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/service:dump",
@@ -2540,9 +2384,12 @@ cc_library(
 xla_cc_test(
     name = "priority_fusion_test",
     srcs = ["priority_fusion_test.cc"],
+    local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]),
     tags = ["no_pip"],
     deps = [
+        ":backend_configs_cc",
         ":gpu_device_info_for_tests",
+        ":gpu_fusible",
         ":hlo_fusion_analysis",
         ":priority_fusion",
         "//xla:shape_util",
@@ -2557,6 +2404,7 @@ xla_cc_test(
         "@com_google_absl//absl/strings:string_view",
         "@com_google_googletest//:gtest",
         "@local_tsl//tsl/platform:status_matchers",
+        "@local_tsl//tsl/platform:statusor",
     ],
 )
 
@@ -4162,11 +4010,13 @@ cc_library(
         "//xla/service:layout_assignment",
         "//xla/service:logical_buffer",
         "//xla/stream_executor",
+        "//xla/tsl/util:env_var",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/types:span",
         "@local_tsl//tsl/platform:errors",
+        "@local_tsl//tsl/platform:status",
         "@local_tsl//tsl/platform:statusor",
     ],
 )
@@ -4827,6 +4677,7 @@ xla_test(
         ":cublas_cudnn",
         ":cudnn_fused_mha_rewriter",
         ":cudnn_fused_mha_transpose_fusion",
+        "//xla:error_spec",
         "//xla:test_helpers",
         "//xla:util",
         "//xla:xla_data_proto_cc",
