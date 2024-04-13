@@ -1172,8 +1172,8 @@ class PjRtBuffer {
   // Note that the underlying driver may have requirements
   // on the alignment of `dst` and `offset` as well. Look at implementations of
   // this method for specific alignment requirements.
-  virtual PjRtFuture<Status> CopyRawToHost(void* dst, int64_t offset,
-                                           int64_t transfer_size) = 0;
+  virtual PjRtFuture<> CopyRawToHost(void* dst, int64_t offset,
+                                     int64_t transfer_size) = 0;
 
   // As above, but the transfer will not happen until `dst` is fulfilled with a
   // valid pointer. If `dst` is fulfilled with a non-Ok status, then the
@@ -1183,8 +1183,9 @@ class PjRtBuffer {
   // before `dst` is fulfilled.
   //
   // Note that the default implementation will block until `dst` is fulfilled.
-  virtual PjRtFuture<Status> CopyRawToHostFuture(
-      PjRtFuture<StatusOr<void*>> dst, int64_t offset, int64_t transfer_size);
+  virtual PjRtFuture<> CopyRawToHostFuture(PjRtFuture<StatusOr<void*>> dst,
+                                           int64_t offset,
+                                           int64_t transfer_size);
 
   // Drops the buffer's reference to its associated device memory, leaving the
   // buffer in an invalid state. The memory will be freed lazily when all async
@@ -1353,11 +1354,11 @@ class PjRtBuffer {
     virtual ~AsyncSendPlaceholder() = default;
 
     // Equivalent to PjRtBuffer::ToLiteral on the underlying buffer;
-    virtual PjRtFuture<Status> ToLiteral(MutableLiteralBase* literal) = 0;
+    virtual PjRtFuture<> ToLiteral(MutableLiteralBase* literal) = 0;
 
     // Equivalent to PjRtBuffer::CopyRawToHost on the underlying buffer;
-    virtual PjRtFuture<Status> CopyRawToHost(void* dst, int64_t offset,
-                                             int64_t transfer_size) = 0;
+    virtual PjRtFuture<> CopyRawToHost(void* dst, int64_t offset,
+                                       int64_t transfer_size) = 0;
 
     // Equivalent to PjRtBuffer::CopyToRemoteDevice on the underlying buffer;
     virtual void CopyToRemoteDevice(absl::string_view serialized_descriptor,
@@ -1384,7 +1385,7 @@ class PjRtBuffer {
   // the buffer has been deleted or donated then the returned future will stay
   // valid (will not transition to error as a consequence of buffer deletion)
   // even if the buffer is subsequently donated or deleted.
-  virtual PjRtFuture<Status> GetReadyFuture() = 0;
+  virtual PjRtFuture<> GetReadyFuture() = 0;
 
   // Blocks the host until the buffer's value has been computed and is ready for
   // immediate use on the device. Useful in particular for timing benchmarks.

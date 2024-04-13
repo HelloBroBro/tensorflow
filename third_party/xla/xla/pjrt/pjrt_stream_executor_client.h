@@ -403,11 +403,10 @@ class PjRtStreamExecutorClient : public PjRtClient {
     }
   }
 
-  virtual PjRtFuture<Status> CopyRawSubBufferToHost(PjRtBuffer* buffer,
-                                                    void* dst, int64_t offset,
-                                                    int64_t transfer_size) {
-    return PjRtFuture<Status>(
-        Unimplemented("Raw copies to host not implemented."));
+  virtual PjRtFuture<> CopyRawSubBufferToHost(PjRtBuffer* buffer, void* dst,
+                                              int64_t offset,
+                                              int64_t transfer_size) {
+    return PjRtFuture<>(Unimplemented("Raw copies to host not implemented."));
   }
 
   // Helper function for creating PjRtStreamExecutorExecutables. Modifies
@@ -673,12 +672,12 @@ class PjRtStreamExecutorBuffer : public PjRtBuffer {
 
   StatusOr<size_t> GetOnDeviceSizeInBytes() const override;
 
-  PjRtFuture<Status> CopyRawToHost(void* dst, int64_t offset,
-                                   int64_t transfer_size) override;
+  PjRtFuture<> CopyRawToHost(void* dst, int64_t offset,
+                             int64_t transfer_size) override;
 
-  PjRtFuture<Status> CopyRawToHostFuture(PjRtFuture<StatusOr<void*>> dst,
-                                         int64_t offset,
-                                         int64_t transfer_size) override;
+  PjRtFuture<> CopyRawToHostFuture(PjRtFuture<StatusOr<void*>> dst,
+                                   int64_t offset,
+                                   int64_t transfer_size) override;
 
   // Drops the buffer's reference to its associated device memory, leaving the
   // buffer in an invalid state. The memory will be freed lazily when all async
@@ -724,7 +723,7 @@ class PjRtStreamExecutorBuffer : public PjRtBuffer {
       std::vector<RemoteSendCallback> callbacks,
       const ScatterDetails& scatter_details) override;
 
-  PjRtFuture<Status> GetReadyFuture() override;
+  PjRtFuture<> GetReadyFuture() override;
 
   bool IsOnCpu() const override;
 
@@ -804,7 +803,7 @@ class PjRtStreamExecutorBuffer : public PjRtBuffer {
   std::shared_ptr<TrackedDeviceBuffer> device_buffer_ ABSL_GUARDED_BY(mu_);
   // Count of holds on the buffer.
   std::array<int, ScopedHold::Type::kMaxValue> holds_ ABSL_GUARDED_BY(mu_);
-  PjRtFuture<Status>::Promise definition_promise_ ABSL_GUARDED_BY(mu_);
+  PjRtFuture<>::Promise definition_promise_ ABSL_GUARDED_BY(mu_);
 };
 
 // Wraps one or more XLA LocalExecutables (one per partition, as specified by
