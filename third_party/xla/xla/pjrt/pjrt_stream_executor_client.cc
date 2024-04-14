@@ -1548,14 +1548,14 @@ PjRtFuture<> PjRtStreamExecutorBuffer::ToLiteral(MutableLiteralBase* literal) {
     StatusOr<EventPool::Handle> event_or =
         local_device->event_pool().AllocateEvent(stream->parent());
     if (!event_or.ok()) {
-      promise.SetError(event_or.status());
+      promise.Set(event_or.status());
       return;
     }
 
     Status defined_status =
         tracked_device_buffer->definition_events()[0]->GetDefinedStatus();
     if (!defined_status.ok()) {
-      promise.SetError(defined_status);
+      promise.Set(defined_status);
       return;
     }
 
@@ -1574,13 +1574,7 @@ PjRtFuture<> PjRtStreamExecutorBuffer::ToLiteral(MutableLiteralBase* literal) {
 
     transfer_manager->TransferLiteralFromDevice(
         stream, shaped_buffer, literal,
-        [promise](Status status) mutable {
-          if (!status.ok()) {
-            promise.SetError(status);
-          } else {
-            promise.Set();
-          }
-        },
+        [promise](Status status) mutable { promise.Set(std::move(status)); },
         transfer_metadata_ptr);
 
     local_device->event_pool().ThenRecordEvent(stream, event_or.value());
@@ -1588,7 +1582,7 @@ PjRtFuture<> PjRtStreamExecutorBuffer::ToLiteral(MutableLiteralBase* literal) {
 
     defined_status = local_device->ThenRelease(stream, tracked_device_buffer);
     if (!defined_status.ok()) {
-      promise.SetError(defined_status);
+      promise.Set(defined_status);
     }
   };
 
@@ -1644,15 +1638,11 @@ PjRtFuture<> PjRtStreamExecutorBuffer::CopyRawToHostFuture(
            promise = std::move(promise)]() mutable {
             CopyRawToHost(dst, offset, transfer_size)
                 .OnReady([promise = std::move(promise)](Status status) mutable {
-                  if (status.ok()) {
-                    promise.Set();
-                  } else {
-                    promise.SetError(status);
-                  }
+                  promise.Set(std::move(status));
                 });
           });
     } else {
-      promise.SetError(dst.status());
+      promise.Set(dst.status());
     }
   });
   return PjRtFuture<>(std::move(promise));
@@ -1913,61 +1903,51 @@ PjRtFuture<> PjRtStreamExecutorBuffer::GetReadyFuture() {
 
   if (device_buffer) {
     LocalDeviceState* local_device_state = device_->local_device_state();
-    auto async_wait_for_events = [device_buffer,
-                                  local_device_state =
-                                      std::move(local_device_state),
-                                  definition_promise]() mutable {
-      std::unique_ptr<se::Stream> stream;
-      Status defined_status =
-          device_buffer->definition_events()[0]->GetDefinedStatus();
-      if (!defined_status.ok()) {
-        definition_promise.SetError(defined_status);
-        return;
-      }
-      for (auto& event : device_buffer->definition_events()) {
-        if (!event->IsComplete()) {
-          if (stream == nullptr) {
-            stream = local_device_state->BorrowStreamFromPool();
+    auto async_wait_for_events =
+        [device_buffer, local_device_state = std::move(local_device_state),
+         definition_promise]() mutable {
+          std::unique_ptr<se::Stream> stream;
+          Status defined_status =
+              device_buffer->definition_events()[0]->GetDefinedStatus();
+          if (!defined_status.ok()) {
+            definition_promise.Set(defined_status);
+            return;
           }
-          event->WaitForEventOnStream(stream.get());
-        }
-      }
-
-      if (stream != nullptr) {
-        auto* stream_ptr = stream.release();
-        // We already borrowed a stream from the pool so we can safely do
-        // the callback directly on that stream instead of bouncing through
-        // local_device_state->ThenExecuteCallback. The direct callback
-        // saves significant time.
-        auto status = stream_ptr->DoHostCallback(
-            [definition_promise, stream_ptr, local_device_state,
-             event_with_status =
-                 device_buffer->definition_events()[0]]() mutable {
-              local_device_state->ReturnStreamToPool(
-                  std::unique_ptr<se::Stream>(stream_ptr));
-              auto status = event_with_status->GetDefinedStatus();
-              if (status.ok()) {
-                definition_promise.Set();
-              } else {
-                definition_promise.SetError(status);
+          for (auto& event : device_buffer->definition_events()) {
+            if (!event->IsComplete()) {
+              if (stream == nullptr) {
+                stream = local_device_state->BorrowStreamFromPool();
               }
-            });
-        if (!status.ok()) {
-          definition_promise.SetError(status);
-          return;
-        }
-      } else {
-        // All events are already complete; set the `definition_promise`
-        // with the status of the buffer's first definition event which may
-        // have error status to propagate.
-        auto status = device_buffer->definition_events()[0]->GetDefinedStatus();
-        if (status.ok()) {
-          definition_promise.Set();
-        } else {
-          definition_promise.SetError(status);
-        }
-      }
-    };
+              event->WaitForEventOnStream(stream.get());
+            }
+          }
+
+          if (stream != nullptr) {
+            auto* stream_ptr = stream.release();
+            // We already borrowed a stream from the pool so we can safely do
+            // the callback directly on that stream instead of bouncing through
+            // local_device_state->ThenExecuteCallback. The direct callback
+            // saves significant time.
+            auto status = stream_ptr->DoHostCallback(
+                [definition_promise, stream_ptr, local_device_state,
+                 event_with_status =
+                     device_buffer->definition_events()[0]]() mutable {
+                  local_device_state->ReturnStreamToPool(
+                      std::unique_ptr<se::Stream>(stream_ptr));
+                  definition_promise.Set(event_with_status->GetDefinedStatus());
+                });
+            if (!status.ok()) {
+              definition_promise.Set(status);
+              return;
+            }
+          } else {
+            // All events are already complete; set the `definition_promise`
+            // with the status of the buffer's first definition event which may
+            // have error status to propagate.
+            definition_promise.Set(
+                device_buffer->definition_events()[0]->GetDefinedStatus());
+          }
+        };
     device_buffer->definition_events()[0]->ExecuteOrAddToFutureTasks(
         absl::StrFormat("async_wait_for_events_%p", &async_wait_for_events),
         std::move(async_wait_for_events));
@@ -2868,12 +2848,12 @@ PjRtStreamExecutorLoadedExecutable::ExecuteHelper(
     }
   }
 
-  std::optional<PjRtFuture<Status>> future;
+  std::optional<PjRtFuture<>> future;
   if (fill_future) {
-    auto promise = PjRtFuture<Status>::CreatePromise();
-    future = PjRtFuture<Status>(promise);
+    auto promise = PjRtFuture<>::CreatePromise();
+    future = PjRtFuture<>(promise);
     compute_callbacks.push_back(
-        [promise = std::move(promise)]() mutable { promise.Set(OkStatus()); });
+        [promise = std::move(promise)]() mutable { promise.Set(); });
   }
   TF_RETURN_IF_ERROR(device_state->ThenExecuteCallback(
       stream, [callbacks{std::move(compute_callbacks)},
@@ -2891,7 +2871,7 @@ StatusOr<std::vector<std::vector<std::unique_ptr<PjRtBuffer>>>>
 PjRtStreamExecutorLoadedExecutable::Execute(
     absl::Span<const std::vector<PjRtBuffer*>> argument_handles,
     const ExecuteOptions& options,
-    std::optional<std::vector<PjRtFuture<Status>>>& returned_futures) {
+    std::optional<std::vector<PjRtFuture<>>>& returned_futures) {
   if (device_assignment_ == nullptr) {
     return InvalidArgument("Execute expects a non-null device_assignment");
   }
@@ -3015,8 +2995,8 @@ PjRtStreamExecutorLoadedExecutable::Execute(
 StatusOr<std::vector<std::unique_ptr<PjRtBuffer>>>
 PjRtStreamExecutorLoadedExecutable::ExecuteSharded(
     absl::Span<PjRtBuffer* const> argument_handles, PjRtDevice* device,
-    const ExecuteOptions& options,
-    std::optional<PjRtFuture<Status>>& returned_future, bool fill_future) {
+    const ExecuteOptions& options, std::optional<PjRtFuture<>>& returned_future,
+    bool fill_future) {
   if (device_assignment_ == nullptr) {
     return InvalidArgument("ExecuteShard expects a non-null device_assignment");
   }
@@ -3044,8 +3024,8 @@ PjRtStreamExecutorLoadedExecutable::ExecuteSharded(
 StatusOr<std::vector<std::unique_ptr<PjRtBuffer>>>
 PjRtStreamExecutorLoadedExecutable::ExecutePortable(
     absl::Span<PjRtBuffer* const> argument_handles, PjRtDevice* device,
-    const ExecuteOptions& options,
-    std::optional<PjRtFuture<Status>>& returned_future, bool fill_future) {
+    const ExecuteOptions& options, std::optional<PjRtFuture<>>& returned_future,
+    bool fill_future) {
   if (device_assignment_ != nullptr) {
     return InvalidArgument("ExecutePortable gets a non-portable executable");
   }
