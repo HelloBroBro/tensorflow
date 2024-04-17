@@ -52,6 +52,7 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/tf2xla/api/v2/cluster_tf.h"
 #include "tensorflow/compiler/mlir/tf2xla/api/v2/tf_dialect_to_executor.h"
 #include "tensorflow/compiler/mlir/tfrt/backend_compiler.h"
+#include "tensorflow/compiler/mlir/tfrt/function/function.h"
 #include "tensorflow/compiler/mlir/tfrt/transforms/passes.h"
 #include "tensorflow/compiler/mlir/tfrt/transforms/tfrt_pipeline_options.h"
 #include "tensorflow/compiler/mlir/tfrt/transforms/tpu_passes.h"
@@ -79,7 +80,7 @@ namespace {
 
 // Exports all XLA functions in the form of XlaLaunch, and their nested
 // functions.
-StatusOr<std::vector<FunctionDef>> ExportXlaFunctions(
+absl::StatusOr<std::vector<FunctionDef>> ExportXlaFunctions(
     mlir::ModuleOp module, std::vector<std::string>* added_xla_function_names) {
   // Find all XLA functions.
   std::vector<std::string> xla_functions;
@@ -305,7 +306,7 @@ Status ConvertTfMlirToBef(const TfrtCompileOptions& options,
               absl::InternalError("failed to convert MLIR to BEF."));
 
         bef_buffer->shrink_to_fit();
-        return OkStatus();
+        return absl::OkStatus();
       },
       model_context, fallback_state, added_xla_function_names);
 }
@@ -363,7 +364,7 @@ tensorflow::Status AddXlaFunctions(
     }
   }
 
-  return tensorflow::OkStatus();
+  return absl::OkStatus();
 }
 
 }  // namespace tensorflow
