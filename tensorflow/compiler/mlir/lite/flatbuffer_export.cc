@@ -20,6 +20,7 @@ limitations under the License.
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -38,6 +39,7 @@ limitations under the License.
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
+#include "absl/strings/cord.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
@@ -160,6 +162,9 @@ ABSL_CONST_INIT const absl::string_view kFlexOpNamePrefix = "Flex";
 // Use initial buffer size in flatbuffer builder to be same as the initial size
 // used by the TOCO export. (It does not explain rationale for this choice.)
 constexpr size_t kInitialBufferSize = 10240;
+
+// Flatbuffer fields to be padded to 16 bytes aligned.
+constexpr size_t kFbAlignment = 16;
 
 // Set `isSigned` to false if the `type` is an 8-bit unsigned integer type.
 // Since tflite doesn't support unsigned for other types, returns error if
@@ -716,7 +721,7 @@ class Translator {
 
   // Append constant and custom op buffers at the end of the flatbuffer and
   // calculate the offsets
-  void AppendBufferData(std::string& result);
+  void AppendBufferData(absl::Cord& result);
 
   // Update constant & custom op buffer offsets
   // Return false if fail to update offset
@@ -767,6 +772,11 @@ class Translator {
       const std::vector<int32_t>& results,
       mlir::VhloToStablehloTypeConverter& vhlo_type_converter);
 
+  std::optional<BufferOffset<tflite::Operator>> BuildVhloCompositeV1Op(
+      mlir::vhlo::CompositeOpV1 composite_op,
+      const std::vector<int32_t>& operands, const std::vector<int32_t>& results,
+      std::string op_name);
+
   std::optional<BufferOffset<tflite::Operator>> BuildVhloScatterV1Op(
       mlir::vhlo::ScatterOpV1 scatter_op, const std::vector<int32_t>& operands,
       const std::vector<int32_t>& results,
@@ -816,7 +826,8 @@ class Translator {
   // Maps buffer data to corresponding buffer index
   // in the idx map, the value is a pair of offset and size
   absl::flat_hash_map<int, std::pair<uint64_t, uint64_t>> buffer_idx_map_;
-  absl::flat_hash_map<int, std::vector<uint8_t>> buffer_data_map_;
+  absl::flat_hash_map<int, std::string> buffer_data_map_;
+  bool buffer_data_exported_ = false;
 
   // Maps custom options data to corresponding node
   // Key is set to be the list of input tensor indices and list of output tensor
@@ -955,7 +966,8 @@ std::optional<BufferOffset<tflite::Buffer>> Translator::BuildBuffer(
     }
     auto packed_buffer = tflite::PackInt4ValuesDensely(data);
     if (use_buffer_offset_) {
-      buffer_data_map_[index] = packed_buffer;
+      buffer_data_map_[index] =
+          std::string(packed_buffer.begin(), packed_buffer.end());
       return tflite::CreateBuffer(builder_, 0, 1, 1);
     } else {
       if (IsModelBiggerThan2GB(packed_buffer.size())) {
@@ -991,7 +1003,8 @@ std::optional<BufferOffset<tflite::Buffer>> Translator::BuildBuffer(
     if (use_buffer_offset_) {
       std::vector<uint8_t> buffer_data(tensor_buffer, tensor_buffer + bytes);
       free(tensor_buffer);
-      buffer_data_map_[index] = buffer_data;
+      buffer_data_map_[index] =
+          std::string(buffer_data.begin(), buffer_data.end());
       return tflite::CreateBuffer(builder_, 0, 1, 1);
     } else {
       if (IsModelBiggerThan2GB(bytes)) {
@@ -1007,9 +1020,7 @@ std::optional<BufferOffset<tflite::Buffer>> Translator::BuildBuffer(
 
   absl::string_view tensor_data = tensor.tensor_data();
   if (use_buffer_offset_) {
-    std::vector<uint8_t> buffer_data(tensor_data.data(),
-                                     tensor_data.data() + tensor_data.size());
-    buffer_data_map_[index] = buffer_data;
+    buffer_data_map_[index] = std::string(tensor_data);
     return tflite::CreateBuffer(builder_, 0, 1, 1);
   } else {
     if (IsModelBiggerThan2GB(tensor_data.size())) {
@@ -1492,6 +1503,43 @@ uint32_t Translator::GetOpcodeIndex(const std::string& op_name,
   return it.first->second;
 }
 
+void CreateFlexbufferVector(
+    const std::unique_ptr<flexbuffers::Builder>& flex_builder,
+    std::string& name, const mlir::Attribute& attr) {
+  auto start = flex_builder->StartVector(name.c_str());
+  auto array = attr.cast<mlir::ArrayAttr>().getValue();
+
+  for (int i = 0; i < array.size(); i++) {
+    if (llvm::isa<mlir::BoolAttr>(array[i])) {
+      flex_builder->Bool(name.c_str(),
+                         array[i].cast<mlir::BoolAttr>().getValue());
+    } else if (llvm::isa<mlir::StringAttr>(attr)) {
+      flex_builder->String(name.c_str(),
+                           array[i].cast<mlir::StringAttr>().getValue().str());
+    } else if (llvm::isa<mlir::vhlo::BooleanV1Attr>(array[i])) {
+      flex_builder->Bool(name.c_str(),
+                         array[i].cast<mlir::vhlo::BooleanV1Attr>().getValue());
+    } else if (llvm::isa<mlir::vhlo::StringV1Attr>(array[i])) {
+      flex_builder->String(
+          name.c_str(),
+          array[i].cast<mlir::vhlo::StringV1Attr>().getValue().str());
+    } else if (llvm::isa<mlir::vhlo::IntegerV1Attr>(array[i])) {
+      flex_builder->Int(
+          name.c_str(),
+          array[i].cast<mlir::vhlo::IntegerV1Attr>().getValue().getSExtValue());
+    } else if (llvm::isa<mlir::vhlo::FloatV1Attr>(array[i])) {
+      flex_builder->Float(
+          name.c_str(),
+          array[i].cast<mlir::vhlo::FloatV1Attr>().getValue().convertToFloat());
+
+    } else if (llvm::isa<mlir::vhlo::ArrayV1Attr>(array[i])) {
+      CreateFlexbufferVector(flex_builder, name, array[i]);
+    }
+  }
+
+  flex_builder->EndVector(start, /*typed=*/false, /*fixed=*/false);
+}
+
 std::optional<BufferOffset<tflite::Operator>>
 Translator::BuildStablehloOperatorwithoutOptions(
     Operation* inst, const std::vector<int32_t>& operands,
@@ -1566,6 +1614,78 @@ Translator::BuildStablehloGatherOp(mlir::stablehlo::GatherOp gather_op,
       /*intermediates=*/0, /*large_custom_options_offset=*/0,
       /*large_custom_options_size=*/0,
       tflite::BuiltinOptions2_StablehloGatherOptions, gather_option.Union());
+}
+
+std::optional<BufferOffset<tflite::Operator>>
+Translator::BuildVhloCompositeV1Op(mlir::vhlo::CompositeOpV1 composite_op,
+                                   const std::vector<int32_t>& operands,
+                                   const std::vector<int32_t>& results,
+                                   std::string op_name) {
+  uint32_t opcode_index =
+      GetOpcodeIndex(op_name, tflite::BuiltinOperator_STABLEHLO_COMPOSITE);
+
+  int32_t api_version = composite_op.getVersion()
+                            .cast<mlir::vhlo::IntegerV1Attr>()
+                            .getValue()
+                            .getSExtValue();
+
+  auto name = builder_.CreateString(
+      composite_op.getName().cast<mlir::vhlo::StringV1Attr>().getValue().str());
+
+  auto composite_attributes = composite_op.getCompositeAttributes()
+                                  .cast<mlir::vhlo::DictionaryV1Attr>();
+  auto flex_builder = std::make_unique<flexbuffers::Builder>();
+  size_t map_start = flex_builder->StartMap();
+
+  for (auto namedAttr : composite_attributes.getValue()) {
+    auto name =
+        namedAttr.first.cast<mlir::vhlo::StringV1Attr>().getValue().str();
+    auto attr = namedAttr.second;
+
+    if (llvm::isa<mlir::BoolAttr>(attr))
+      flex_builder->Bool(name.c_str(), attr.cast<mlir::BoolAttr>().getValue());
+    else if (llvm::isa<mlir::StringAttr>(attr))
+      flex_builder->String(name.c_str(),
+                           attr.cast<mlir::StringAttr>().getValue().str());
+    else if (llvm::isa<mlir::vhlo::BooleanV1Attr>(attr))
+      flex_builder->Bool(name.c_str(),
+                         attr.cast<mlir::vhlo::BooleanV1Attr>().getValue());
+    else if (llvm::isa<mlir::vhlo::StringV1Attr>(attr))
+      flex_builder->String(
+          name.c_str(), attr.cast<mlir::vhlo::StringV1Attr>().getValue().str());
+    else if (llvm::isa<mlir::vhlo::IntegerV1Attr>(attr))
+      flex_builder->Int(
+          name.c_str(),
+          attr.cast<mlir::vhlo::IntegerV1Attr>().getValue().getSExtValue());
+    else if (llvm::isa<mlir::vhlo::FloatV1Attr>(attr))
+      flex_builder->Float(
+          name.c_str(),
+          attr.cast<mlir::vhlo::FloatV1Attr>().getValue().convertToFloat());
+  }
+
+  flex_builder->EndMap(map_start);
+  flex_builder->Finish();
+
+  int32_t decomposition_subgraph_index =
+      subgraph_index_map_[composite_op.getDecomposition()
+                              .cast<mlir::vhlo::StringV1Attr>()
+                              .getValue()
+                              .str()];
+
+  auto composite_option = tflite::CreateStableHLOCompositeOptions(
+      builder_, name, decomposition_subgraph_index,
+      builder_.CreateVector(flex_builder->GetBuffer()),
+      tflite::CustomOptionsFormat_FLEXBUFFERS, api_version);
+
+  return tflite::CreateOperator(
+      builder_, opcode_index, builder_.CreateVector(operands),
+      builder_.CreateVector(results), tflite::BuiltinOptions_NONE,
+      /*builtin_options=*/0, /*custom_options=*/0,
+      tflite::CustomOptionsFormat_FLEXBUFFERS,
+      /*mutating_variable_inputs=*/0, /*intermediates=*/0,
+      /*large_custom_options_offset=*/0, /*large_custom_options_size=*/0,
+      tflite::BuiltinOptions2_StableHLOCompositeOptions,
+      composite_option.Union());
 }
 
 std::optional<BufferOffset<tflite::Operator>>
@@ -2030,6 +2150,10 @@ std::optional<BufferOffset<tflite::Operator>> Translator::BuildOperator(
     }
     if (auto vhlo_op = llvm::dyn_cast<mlir::vhlo::PadOpV1>(inst)) {
       return BuildVhloPadV1Op(vhlo_op, operands, results, vhlo_type_converter);
+    }
+    if (auto vhlo_op = llvm::dyn_cast<mlir::vhlo::CompositeOpV1>(inst)) {
+      return BuildVhloCompositeV1Op(vhlo_op, operands, results,
+                                    inst->getName().getStringRef().str());
     }
     // for ops don't have kernels, only serialize when conversion is set to
     // true
@@ -3197,17 +3321,19 @@ std::optional<std::string> Translator::Translate(
     op_or_arg_name_mapper = &default_op_or_arg_name_mapper;
   if (!UpdateEntryFunction(module)) return std::nullopt;
   if (!IsValidTFLiteMlirModule(module)) return std::nullopt;
-  Translator translator(module, toco_flags, tags, op_or_arg_name_mapper,
-                        metadata, custom_option_alignment);
-  translator.convert_stablehlo_ = serialize_stablehlo_ops;
-  auto ret = translator.TranslateInternal();
-  if (translator.require_use_buffer_offset_) {
+  auto translator = std::unique_ptr<Translator>(
+      new Translator(module, toco_flags, tags, op_or_arg_name_mapper, metadata,
+                     custom_option_alignment));
+  translator->convert_stablehlo_ = serialize_stablehlo_ops;
+  auto ret = translator->TranslateInternal();
+  if (translator->require_use_buffer_offset_) {
+    ret = std::nullopt;
     auto new_toco_flags = toco_flags;
     new_toco_flags.set_use_buffer_offset(true);
-    Translator new_translator(module, new_toco_flags, tags,
-                              op_or_arg_name_mapper, metadata,
-                              custom_option_alignment);
-    return new_translator.TranslateInternal();
+    translator = std::unique_ptr<Translator>(
+        new Translator(module, new_toco_flags, tags, op_or_arg_name_mapper,
+                       metadata, custom_option_alignment));
+    return translator->TranslateInternal();
   }
   return ret;
 }
@@ -3453,63 +3579,91 @@ std::optional<std::string> Translator::TranslateInternal() {
     }
   }
 
-  auto result =
-      std::string(reinterpret_cast<const char*>(builder_.GetBufferPointer()),
-                  builder_.GetSize());
+  absl::Cord result;
+  auto fbs = absl::string_view(
+      reinterpret_cast<const char*>(builder_.GetBufferPointer()),
+      builder_.GetSize());
+  result.Append(fbs);
 
   // Return serialized string for the built FlatBuffer.
   if (use_buffer_offset_) {
+    // Pad to be 16 bytes aligned
+    {
+      std::string pad(kFbAlignment - result.size() % kFbAlignment, '\0');
+      result.Append(std::move(pad));
+    }
     AppendBufferData(result);
-    auto mutable_model = tflite::GetMutableModel(result.data());
+    std::string result_str = std::string(std::move(result));
+    auto mutable_model = tflite::GetMutableModel(result_str.data());
     bool ret = UpdateBufferOffsets(mutable_model);
     if (!ret) {
       return std::nullopt;
     }
-    return result;
+    return result_str;
   }
-  return result;
+  return std::string(result);
 }
 
-void Translator::AppendBufferData(std::string& result) {
+void Translator::AppendBufferData(absl::Cord& result) {
   std::unordered_map<uint64_t, std::pair<int64_t, int64_t>> hashcode_to_pos;
-  // Pad to be 16 bytes aligned
-  while (result.size() % 16 != 0) result += '\0';
-  for (auto& it : buffer_data_map_) {
-    auto buffer = std::string(it.second.begin(), it.second.end());
-    int64_t index = it.first;
+  // Buffer data should be exported only once.
+  assert(!buffer_data_exported_);
+
+  auto it = buffer_data_map_.begin();
+  while (it != buffer_data_map_.end()) {
+    std::string buffer = it->second;
+    int64_t index = it->first;
     int64_t offset = result.size();
-    int64_t size = it.second.size();
+    int64_t size = buffer.size();
     uint64_t hash = tsl::Fingerprint64(buffer);
     if (hashcode_to_pos.find(hash) == hashcode_to_pos.end()) {
       hashcode_to_pos[hash] = std::make_pair(offset, size);
       buffer_idx_map_[index] = std::make_pair(offset, size);
-      result += std::string(it.second.begin(), it.second.end());
-      // Pad to be 16 bytes aligned
-      while (result.size() % 16 != 0) result += '\0';
+      result.Append(std::move(buffer));
+      // Pad to be 16 bytes aligned.
+      {
+        std::string pad(kFbAlignment - result.size() % kFbAlignment, '\0');
+        result.Append(std::move(pad));
+      }
     } else {
       // only update offset/index.
       buffer_idx_map_[index] = hashcode_to_pos[hash];
     }
+    buffer_data_map_.erase(it);
+    it = buffer_data_map_.begin();
+    buffer_data_exported_ = true;
   }
   // pad 16 bytes for the last buffer for XNNPack
-  result += "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+  result.Append("\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0");
   // pad to be 16 bytes aligned
-  while (result.size() % 16 != 0) result += '\0';
+  {
+    std::string pad(kFbAlignment - result.size() % kFbAlignment, '\0');
+    result.Append(std::move(pad));
+  }
 
   for (auto& it : custom_op_data_map_) {
-    while (result.size() % 16 != 0) result += '\0';
+    {
+      std::string pad(kFbAlignment - result.size() % kFbAlignment, '\0');
+      result.Append(std::move(pad));
+    }
     if (custom_option_alignment_.has_value()) {
-      while (result.size() % custom_option_alignment_.value() != 0)
-        result += '\0';
+      {
+        auto alignment = custom_option_alignment_.value();
+        std::string pad(alignment - result.size() % alignment, '\0');
+        result.Append(std::move(pad));
+      }
     }
     auto buffer = std::string(it.second.begin(), it.second.end());
     int64_t offset = result.size();
     int64_t size = it.second.size();
     custom_op_idx_map_[it.first] = std::make_pair(offset, size);
-    result += buffer;
+    result.Append(std::move(buffer));
   }
   // pad to be 16 bytes aligned
-  while (result.size() % 16 != 0) result += '\0';
+  {
+    std::string pad(kFbAlignment - result.size() % kFbAlignment, '\0');
+    result.Append(std::move(pad));
+  }
 }
 
 bool Translator::UpdateBufferOffsets(tflite::Model* mutable_model) {
