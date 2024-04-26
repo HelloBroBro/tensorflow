@@ -68,6 +68,7 @@ cc_library(
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
     ],
     alwayslink = 1,
 )
@@ -546,6 +547,7 @@ cc_library(
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
         "@llvm-project//mlir:TransformUtils",
         "@llvm-project//mlir:Transforms",
         "@local_xla//xla/mlir_hlo",
@@ -751,6 +753,27 @@ cc_library(
         "@local_xla//xla/mlir_hlo",
     ],
     alwayslink = True,
+)
+
+cc_library(
+    name = "optimize_layout",
+    srcs = [
+        "transforms/optimize_layout.cc",
+    ],
+    hdrs = ["transforms/passes.h"],
+    compatible_with = get_compatible_with_portable(),
+    deps = [
+        ":passes_inc_gen",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:DialectUtils",
+        "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TransformUtils",
+        "@stablehlo//:stablehlo_ops",
+    ],
+    alwayslink = 1,
 )
 
 gentbl_cc_library(
