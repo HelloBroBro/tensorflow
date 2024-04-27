@@ -118,21 +118,12 @@ class HloComputationFusion : public internal::HloFusionInstructionAdaptor {
   explicit HloComputationFusion(const HloComputation* computation,
                                 const HloFusionAdaptor* parent)
       : computation_(computation), parent_(parent) {
-    // HloFusionAdaptor should only be created for fusion computations, that
-    // usually have only a few roots, but there is a case when we can it for
-    // non-fusion computations with thousands of roots. It happens inside
-    // `FindNonTrivialHero` and it gets very expensive. Calling
-    // `FindNonTrivialHero` also doesn't make sense on non-fusion computation,
-    // but `InstructionFusion` and `FusionMerger` depend on this behavoiur in
-    // `IsProducerConsumerFusible`.
-    //
     // `FindNonTrivialHero` only call `ContainsInstruction` and doesn't use
     // information about roots, so we can skip looking for roots as performance
     // optimization.
     // TODO(shyshkov): Clean this up once priority fusion is fully launched.
-    if (computation->IsFusionComputation()) {
-      roots_ = FindRoots(computation);
-    }
+    CHECK(computation->IsFusionComputation());
+    roots_ = FindRoots(computation);
   }
 
   absl::InlinedVector<HloInstructionAdaptor, 2> FindRoots(
@@ -425,6 +416,43 @@ std::optional<HloInstructionAdaptor> HloFindIf(
       },
       [](HloInstructionAdaptor) {}, visit_operands);
   return result;
+}
+
+std::optional<const HloInstruction*> HloFindIf(
+    absl::Span<const HloInstruction* const> roots,
+    const std::function<bool(const HloInstruction* node)>& visit,
+    bool visit_operands) {
+  absl::flat_hash_set<const HloInstruction*> visited;
+  std::queue<const HloInstruction*> q;
+  auto enqueue = [&](const HloInstruction* node) {
+    if (visit_operands) {
+      for (const HloInstruction* operand : node->operands()) {
+        if (visited.insert(operand).second) {
+          q.push(operand);
+        }
+      }
+    } else {
+      for (const HloInstruction* operand : node->users()) {
+        if (visited.insert(operand).second) {
+          q.push(operand);
+        }
+      }
+    }
+  };
+  for (auto root : roots) {
+    if (visited.insert(root).second) {
+      q.push(root);
+    }
+  }
+  while (!q.empty()) {
+    const HloInstruction* node = q.front();
+    q.pop();
+    if (visit(node)) {
+      return node;
+    }
+    enqueue(node);
+  }
+  return std::nullopt;
 }
 
 }  // namespace gpu

@@ -100,12 +100,12 @@ cc_library(
     compatible_with = get_compatible_with_portable(),
     visibility = ["//visibility:public"],
     deps = [
-        ":nccl_clique_key",
         "//xla:executable_run_options",
         "//xla:status_macros",
         "//xla:statusor",
         "//xla/service:executable",
         "//xla/service:global_device_id",
+        "//xla/service/gpu/runtime:nccl_clique_key",
         "//xla/stream_executor",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/status",
@@ -872,34 +872,6 @@ cc_library(
     ],
 )
 
-cc_library(
-    name = "nccl_clique_key",
-    srcs = ["nccl_clique_key.cc"],
-    hdrs = ["nccl_clique_key.h"],
-    compatible_with = get_compatible_with_portable(),
-    deps = [
-        "//xla/service:global_device_id",
-        "@com_google_absl//absl/algorithm:container",
-        "@com_google_absl//absl/container:btree",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/types:span",
-    ],
-)
-
-xla_cc_test(
-    name = "nccl_clique_key_test",
-    srcs = ["nccl_clique_key_test.cc"],
-    deps = [
-        ":nccl_clique_key",
-        "//xla/service:global_device_id",
-        "@com_google_absl//absl/container:btree",
-        "@local_tsl//tsl/platform:test",
-        "@local_tsl//tsl/platform:test_main",
-    ],
-)
-
 cuda_library(
     name = "sleep_kernel",
     srcs = if_cuda_is_configured(["sleep_kernel.cu.cc"]),
@@ -930,7 +902,6 @@ cc_library(
         ":gpu_constants",
         ":gpu_executable_run_options",
         ":ir_emission_utils",
-        ":nccl_clique_key",
         ":stream_executor_util",
         "//xla:executable_run_options",
         "//xla:shape_tree",
@@ -952,6 +923,7 @@ cc_library(
         "//xla/service:xla_debug_info_manager",
         "//xla/service/gpu/runtime:annotation",
         "//xla/service/gpu/runtime:nccl_clique",
+        "//xla/service/gpu/runtime:nccl_clique_key",
         "//xla/service/gpu/runtime:thunk",
         "//xla/stream_executor",
         "//xla/stream_executor:device_description",
@@ -3644,11 +3616,12 @@ xla_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_offloading_test",
     srcs = ["gpu_offloading_test.cc"],
-    tags = tf_cuda_tests_tags(),
+    backends = ["gpu"],
     deps = [
+        ":backend_configs_cc",
         ":horizontal_loop_fusion",
         ":metrics",
         "//xla:autotune_results_proto_cc",
@@ -3659,7 +3632,6 @@ xla_cc_test(
         "//xla/hlo/utils:hlo_matchers",
         "//xla/service:buffer_assignment",
         "//xla/service:buffer_value",
-        "//xla/service:gpu_plugin",
         "//xla/service:hlo_cost_analysis",
         "//xla/service:hlo_memory_scheduler",
         "//xla/service:hlo_rematerialization",
@@ -3667,7 +3639,9 @@ xla_cc_test(
         "//xla/service:pattern_matcher",
         "//xla/service:pattern_matcher_gmock",
         "//xla/service:xla_debug_info_manager",
+        "//xla/service/gpu:stream_attribute_annotator",
         "//xla/tests:hlo_test_base",
+        "//xla/tests:test_macros_header",
         "//xla/tests:xla_internal_test_main",
         "@com_google_absl//absl/base:log_severity",
         "@com_google_absl//absl/log:scoped_mock_log",
@@ -3913,6 +3887,40 @@ cc_library(
         "//xla/stream_executor/rocm:rocm_platform_id",
     ],
     alwayslink = True,  # Contains compiler registration
+)
+
+cc_library(
+    name = "gpu_algebraic_simplifier",
+    srcs = [
+        "gpu_algebraic_simplifier.cc",
+    ],
+    hdrs = [
+        "gpu_algebraic_simplifier.h",
+    ],
+    deps = [
+        "//xla:util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:algebraic_simplifier",
+        "//xla/service:hlo_pass",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "gpu_algebraic_simplifier_test",
+    srcs = ["gpu_algebraic_simplifier_test.cc"],
+    deps = [
+        ":gpu_algebraic_simplifier",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:algebraic_simplifier",
+        "//xla/tests:hlo_test_base",
+        "//xla/tests:xla_internal_test_main",
+        "@com_google_googletest//:gtest",
+        "@local_tsl//tsl/platform:statusor",
+    ],
 )
 
 cc_library(
@@ -5819,6 +5827,7 @@ cc_library(
     name = "gpu_symbol_repository",
     hdrs = ["gpu_symbol_repository.h"],
     deps = [
+        "//xla:autotune_results_proto_cc",
         "//xla:xla_proto_cc",
         "//xla/service:symbol_repository",
     ],
