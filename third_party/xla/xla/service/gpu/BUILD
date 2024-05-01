@@ -38,6 +38,7 @@ load("//xla/tests:build_defs.bzl", "xla_test")
 load(
     "//xla/tsl:tsl.bzl",
     "if_google",
+    "if_oss",
     "internal_visibility",
     "tsl_copts",
     "tsl_gpu_library",
@@ -651,9 +652,6 @@ xla_test(
 xla_test(
     name = "ir_emitter_triton_large_test",
     srcs = if_cuda_is_configured(["ir_emitter_triton_large_test.cc"]),
-    backend_tags = {"gpu": [
-        "requires-gpu-sm80",
-    ]},
     backends = [
         "gpu_a100",
         "gpu_h100",
@@ -1414,6 +1412,41 @@ xla_cc_test(
 )
 
 cc_library(
+    name = "gemm_degenerate_dim_remover",
+    srcs = ["gemm_degenerate_dim_remover.cc"],
+    hdrs = ["gemm_degenerate_dim_remover.h"],
+    deps = [
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:hlo_pass",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@local_tsl//tsl/platform:errors",
+        "@local_tsl//tsl/platform:statusor",
+    ],
+)
+
+xla_cc_test(
+    name = "gemm_degenerate_dim_remover_test",
+    srcs = ["gemm_degenerate_dim_remover_test.cc"],
+    deps = [
+        ":gemm_degenerate_dim_remover",
+        "//xla/hlo/ir:hlo",
+        "//xla/tests:hlo_test_base",
+        "//xla/tests:xla_internal_test_main",  # fixdeps: keep
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_googletest//:gtest_main",
+        "@local_tsl//tsl/platform:statusor",
+    ],
+)
+
+cc_library(
     name = "split_k_gemm_rewriter",
     srcs = ["split_k_gemm_rewriter.cc"],
     hdrs = ["split_k_gemm_rewriter.h"],
@@ -1654,18 +1687,9 @@ xla_test(
 xla_test(
     name = "gemm_algorithm_picker_test",
     srcs = if_gpu_is_configured(["gemm_algorithm_picker_test.cc"]),
-    backend_tags = {
-        "gpu": [
-            "requires-gpu-nvidia",
-            "noasan",
-            "nomsan",
-            "requires-gpu-sm70-only",
-        ],
-    },
     backends = [
-        "gpu",
         "gpu_v100",
-    ],
+    ] + if_oss(["gpu"]),
     deps = [
         ":autotuner_util",
         ":backend_configs_cc",
@@ -1956,17 +1980,12 @@ cc_library(
 xla_test(
     name = "conv_algorithm_picker_test",
     srcs = if_gpu_is_configured(["conv_algorithm_picker_test.cc"]),
-    backend_tags = {
-        "gpu": [
-            "requires-gpu-nvidia",
-            "noasan",
-            "nomsan",
-            "requires-gpu-sm70-only",
-        ],
-    },
     backends = [
-        "gpu",
         "gpu_v100",
+    ] + if_oss(["gpu"]),
+    tags = [
+        "noasan",
+        "nomsan",
     ],
     deps = [
         ":autotuner_util",
@@ -4080,6 +4099,7 @@ cc_library(
         "//xla:types",
         "//xla:util",
         "//xla/stream_executor",
+        "//xla/stream_executor:device_memory_handle",
         "//xla/stream_executor:stream_executor_headers",
         "//xla/stream_executor/gpu:gpu_executor_header",
         "@com_google_absl//absl/base:core_headers",
@@ -4320,14 +4340,22 @@ xla_cc_test(
     ],
 )
 
+cuda_library(
+    name = "stream_executor_util_kernel",
+    srcs = if_cuda_is_configured(["stream_executor_util_kernel.cu.cc"]),
+    deps = ["@local_config_cuda//cuda:cuda_headers"],
+)
+
 cc_library(
     name = "stream_executor_util",
     srcs = ["stream_executor_util.cc"],
     hdrs = ["stream_executor_util.h"],
     copts = tsl_copts(),
+    local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]),
     deps = [
         ":cublas_cudnn",
         ":launch_dimensions",
+        ":stream_executor_util_kernel",
         "//xla:autotuning_proto_cc",
         "//xla:shape_util",
         "//xla:statusor",
@@ -4448,6 +4476,7 @@ cc_library(
         "//xla:util",
         "//xla/service:hlo_module_config",
         "//xla/stream_executor",
+        "//xla/stream_executor:device_memory_handle",
         "//xla/stream_executor/gpu:asm_compiler",
         "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:logging",
@@ -4484,6 +4513,7 @@ xla_cc_test(
         "//xla/service:hlo_module_config",
         "//xla/stream_executor",
         "//xla/stream_executor:device_memory_allocator",
+        "//xla/stream_executor:device_memory_handle",
         "//xla/stream_executor:platform_manager",
         "@local_tsl//tsl/platform:ml_dtypes",
         "@local_tsl//tsl/platform:status",
@@ -4599,17 +4629,15 @@ xla_test(
     name = "cudnn_fused_conv_rewriter_test",
     srcs = ["cudnn_fused_conv_rewriter_test.cc"],
     backend_tags = {
-        "gpu": [
-            "requires-gpu-nvidia",
-            "requires-gpu-sm80-only",
+        "gpu_a100": [
             "noasan",
             "nomsan",
             "no_rocm",
         ],
     },
     backends = [
-        "gpu",
-    ],
+        "gpu_a100",
+    ] + if_oss(["gpu"]),
     local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]),
     shard_count = 10,
     deps = [
