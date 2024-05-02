@@ -1,4 +1,4 @@
-/* Copyright 2022 The OpenXLA Authors.
+/* Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -12,21 +12,15 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+#ifndef TENSORFLOW_COMPILER_MLIR_LITE_STABLEHLO_ODML_CONVERTER_FOLDERS_H_
+#define TENSORFLOW_COMPILER_MLIR_LITE_STABLEHLO_ODML_CONVERTER_FOLDERS_H_
 
-#ifndef XLA_MLIR_XLA_CPU_DIALECT_TD_
-#define XLA_MLIR_XLA_CPU_DIALECT_TD_
+namespace mlir::odml {
 
-include "mlir/IR/OpBase.td"
+// Populates the pattern set with all folding patterns. These patterns
+// are intended to have precedence over any other patterns added to the set.
+void PopulateFolderPatterns(RewritePatternSet &patternSet);
 
-def XlaCpuDialect : Dialect {
-  let name = "xla_cpu";
+}  // namespace mlir::odml
 
-  let summary = "Enums and operations for the xla_cpu dialect";
-  let description = [{
-    This dialect contains operations that bridge the gap between HLO and the
-    CPU runtime.
-  }];
-  let cppNamespace = "::mlir::xla_cpu";
-}
-
-#endif  // XLA_MLIR_XLA_CPU_DIALECT_TD_
+#endif  // TENSORFLOW_COMPILER_MLIR_LITE_STABLEHLO_ODML_CONVERTER_FOLDERS_H_
