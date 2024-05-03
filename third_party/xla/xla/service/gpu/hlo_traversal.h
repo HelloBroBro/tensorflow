@@ -85,6 +85,9 @@ class HloFusionInstructionAdaptor {
  public:
   virtual ~HloFusionInstructionAdaptor() = default;
   virtual bool ContainsInstruction(const HloInstruction* instruction) const = 0;
+  // If it is a regular multi-output fusion, the order of the returned roots
+  // matches the order of the tuple elements of the tuple root of the fusion
+  // computation. We do not deduplicate fusion roots.
   virtual absl::InlinedVector<HloInstructionAdaptor, 2> GetRoots() const = 0;
   virtual absl::InlinedVector<HloInstructionAdaptor, 2>
   MakeInstructionPostOrder() const = 0;
@@ -185,6 +188,11 @@ std::optional<const HloInstruction*> HloFindIf(
 void FindFusionArguments(
     const HloFusionAdaptor& fusion,
     const std::function<void(HloInstructionAdaptor producer)>& visit);
+
+// Find a use chain from `parent` to `root`. Empty if no chain exists.
+// `[parent]` if `parent` is `root`.
+std::vector<HloInstructionAdaptor> HloFindUseChain(HloInstructionAdaptor parent,
+                                                   HloInstructionAdaptor root);
 
 }  // namespace gpu
 }  // namespace xla
