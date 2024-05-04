@@ -1,4 +1,4 @@
-/* Copyright 2021 The OpenXLA Authors.
+/* Copyright 2024 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,12 +13,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef MLIR_HLO_LHLO_IR_LHLO_STRUCTURED_INTERFACE_H
-#define MLIR_HLO_LHLO_IR_LHLO_STRUCTURED_INTERFACE_H
+#ifndef XLA_SERVICE_CPU_RUNTIME_HANDLE_FFI_CALL_H_
+#define XLA_SERVICE_CPU_RUNTIME_HANDLE_FFI_CALL_H_
 
-#include "mlir/IR/OpDefinition.h"
+#include <cstdint>
 
-/// Include the generated interface declarations.
-#include "lhlo/IR/lhlo_structured_interface.h.inc"
+extern "C" {
 
-#endif  // MLIR_HLO_LHLO_IR_LHLO_STRUCTURED_INTERFACE_H
+extern void __xla_cpu_runtime_HandleFfiCall(
+    const char* target_name_ptr, int64_t target_name_len, void* output,
+    void** inputs, const char* opaque_str_ptr, int64_t opaque_str_len,
+    void* status_opaque, int32_t* operand_types, int64_t operand_count,
+    int64_t* operand_dims, int32_t* result_types, int64_t result_count,
+    int64_t* result_dims);
+
+}  // extern "C"
+
+#endif  // XLA_SERVICE_CPU_RUNTIME_HANDLE_FFI_CALL_H_
