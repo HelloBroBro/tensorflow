@@ -1,3 +1,4 @@
+load("@bazel_skylib//:bzl_library.bzl", "bzl_library")
 load(
     "@local_tsl//tsl/platform:build_config.bzl",
     "tf_proto_library",
@@ -149,6 +150,7 @@ cc_library(
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
         "@local_tsl//tsl/platform:logging",
         "@local_tsl//tsl/platform:ml_dtypes",
     ],
@@ -415,11 +417,10 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":status",
-        ":status_macros",
-        ":types",
         ":util",
         "@com_google_absl//absl/hash",
         "@local_tsl//tsl/platform:env",
+        "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:path",
         "@local_tsl//tsl/platform:protobuf",
     ],
@@ -537,12 +538,10 @@ xla_cc_test(
     srcs = ["primitive_util_test.cc"],
     deps = [
         ":shape_util",
-        ":status_macros",
         ":test",
         ":test_helpers",
-        ":types",
-        ":util",
         ":xla_data_proto_cc",
+        "@local_tsl//tsl/platform:statusor",
         "@local_tsl//tsl/platform:test_main",
     ],
 )
@@ -1222,6 +1221,7 @@ cc_library(
     hdrs = ["printer.h"],
     visibility = ["//visibility:public"],
     deps = [
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:cord",
         "@local_tsl//tsl/platform:logging",
@@ -1258,4 +1258,21 @@ alias(
     name = "bazel_issue_21519",
     actual = ":empty",
     visibility = ["//visibility:public"],
+)
+
+bzl_library(
+    name = "lit_bzl",
+    srcs = ["lit.bzl"],
+    deps = ["@bazel_skylib//lib:paths"],
+)
+
+bzl_library(
+    name = "xla_bzl",
+    srcs = ["xla.bzl"],
+    deps = [
+        "//xla/tsl:tsl_bzl",
+        "@local_config_rocm//rocm:build_defs_bzl",
+        "@local_tsl//tsl/platform:build_config_root_bzl",
+        "@local_tsl//tsl/platform/default:cuda_build_defs_bzl",
+    ],
 )
