@@ -449,7 +449,8 @@ absl::Status CheckGpuDelegateCompatibility(const OpSignature& op_sig) {
       }
       const auto& input0 = op_sig.inputs.at(0);
       const auto& input1 = op_sig.inputs.at(1);
-      if (input0.dims.size() != input1.dims.size()) {
+      if (input0.dims.size() > 1 && input1.dims.size() > 1 &&
+          input0.dims.size() != input1.dims.size()) {
         return absl::UnimplementedError(
             absl::StrCat("ADD doesn't support broadcasting - input0: [",
                          absl::StrJoin(input0.dims, ","), "], input1: [",
@@ -699,7 +700,7 @@ absl::Status CheckGpuDelegateCompatibility(const OpSignature& op_sig) {
               "MUL requires one tensor that not less than second in all "
               "dimensions.");
         }
-      } else {
+      } else if (input0.dims.size() > 1 && input1.dims.size() > 1) {
         return absl::UnimplementedError(
             absl::StrCat("MUL doesn't support broadcasting - input0: [",
                          absl::StrJoin(input0.dims, ","), "], input1: [",
