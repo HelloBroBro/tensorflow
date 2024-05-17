@@ -695,7 +695,7 @@ absl::Status RunOptimizationPasses(
     // Scatter can be indeterministic if indices are not unique or a non
     // associative combiner function is used. Eliminate these Scatter ops.
     pipeline.AddPass<ScatterExpander>(
-        ScatterExpander::kEliminateIndeterminisitcScatters);
+        ScatterExpander::kEliminateIndeterministicScatters);
   }
   // Scatters unsupported on XLA:GPU are eliminated.
   pipeline.AddPass<GpuScatterExpander>();
@@ -1486,16 +1486,6 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
 #endif  // NDEBUG
 
   TF_RETURN_IF_ERROR(pipeline.Run(hlo_module).status());
-
-  if (DumpingEnabledForHloModule(*hlo_module)) {
-    TF_ASSIGN_OR_RETURN(
-        std::string autotune_results,
-        AutotunerUtil::SerializeAutotuneResultsForModule(
-            *hlo_module, autotune_config, /*as_textproto=*/true));
-    DumpToFileInDirOrStdout(*hlo_module, "", "autotune_results.pbtxt",
-                            autotune_results);
-  }
-
   return absl::OkStatus();
 }
 
@@ -1580,12 +1570,12 @@ absl::StatusOr<std::unique_ptr<HloModule>> GpuCompiler::RunHloPasses(
   DumpHloModuleMetadataIfEnabled({module.get()});
 
   AutotuneResults autotune_results;
+  TF_ASSIGN_OR_RETURN(
+      AutotuneConfig autotune_config,
+      GetAutotuneConfig(stream_exec, debug_opts, options, gpu_target_config));
   if (!is_deviceless) {
-    TF_ASSIGN_OR_RETURN(
-        AutotuneConfig autotune_config,
-        GetAutotuneConfig(stream_exec, debug_opts, options, gpu_target_config));
-    autotune_results = AutotunerUtil::SerializeAutotuneResultsForModule(
-        *module, autotune_config);
+    TF_RETURN_IF_ERROR(
+        AutotunerUtil::SerializeAutotuneResults(&autotune_results));
     TF_RETURN_IF_ERROR(SerializeAutotuneResultsToFile(debug_opts));
   }
   const std::optional<std::string> optimized_fingerprint =
@@ -1594,6 +1584,14 @@ absl::StatusOr<std::unique_ptr<HloModule>> GpuCompiler::RunHloPasses(
       optimized_fingerprint.has_value()) {
     MaybeUploadGpuSymbolMapping(*unoptimized_fingerprint,
                                 *optimized_fingerprint);
+  }
+
+  if (DumpingEnabledForHloModule(*module)) {
+    TF_ASSIGN_OR_RETURN(
+        std::string autotune_results,
+        AutotunerUtil::SerializeAutotuneResults(/*as_textproto=*/true));
+    DumpToFileInDirOrStdout(*module, "", "autotune_results.pbtxt",
+                            autotune_results);
   }
 
   return std::move(module);
@@ -2163,16 +2161,44 @@ absl::Status GpuCompiler::RunPostSchedulingPipelines(
   {
     HloPassPipeline pipeline("remat-pipeline");
 
-    HloCostAnalysis hlo_cost_analysis(ShapeSizeBytesFunction());
+    const bool enable_offloading = module->config()
+                                       .debug_options()
+                                       .xla_gpu_enable_host_memory_offloading();
     HloRematerialization::RematerializationModeConfig
         rematerialization_mode_config(/*recompute=*/true, /*compress=*/true,
-                                      /*host_offload=*/false);
+                                      /*host_offload=*/enable_offloading);
+    HloCostAnalysis::Options hlo_cost_analysis_options;
+    hlo_cost_analysis_options.shape_size = ShapeSizeBytesFunction();
+    std::optional<HloRematerialization::HostMemoryOffloadConfig>
+        offloading_config = std::nullopt;
+    if (enable_offloading) {
+      constexpr float kGiga = 1e+9;
+      // Fused multiply-add means that these two instructions are computed as
+      // one, so for this case the maximum flops is doubled.
+      constexpr float kFma = 2;
+      float flops_per_sec = gpu_device_info.core_count() *
+                            gpu_device_info.fpus_per_core() *
+                            gpu_device_info.clock_rate_ghz() * kGiga * kFma;
+      int64_t host_memory_space_color =
+          static_cast<int64_t>(se::MemoryType::kHost);
+      hlo_cost_analysis_options.set_flops_per_second(flops_per_sec);
+      hlo_cost_analysis_options.set_transcendentals_per_second(flops_per_sec);
+      offloading_config =
+          std::make_optional<HloRematerialization::HostMemoryOffloadConfig>(
+              /*host_memory_space=*/host_memory_space_color,
+              /*bandwidth_to_host_bytes_per_second=*/
+              gpu_device_info.memory_bandwidth(),
+              /*bandwidth_from_host_bytes_per_second=*/
+              gpu_device_info.memory_bandwidth());
+    }
+    HloCostAnalysis hlo_cost_analysis(hlo_cost_analysis_options);
     HloRematerialization::Options options(
         hlo_cost_analysis, rematerialization_mode_config,
         // Assume 75% of the total device memory is available for XLA.
         /*memory_limit_bytes=*/scheduler_mem_limit,
         /*block_size_limit=*/1, /*block_rematerialization_factor=*/1,
-        /*min_remat_size=*/0, /*compact_shape_function=*/nullptr);
+        /*min_remat_size=*/0, /*compact_shape_function=*/nullptr,
+        /*host_memory_offload_config=*/offloading_config);
     HloRematerialization::RematerializationSizes sizes;
     pipeline.AddPass<HloRematerialization>(options, sizes);
     pipeline.AddPass<StreamAttributeAnnotator>();
