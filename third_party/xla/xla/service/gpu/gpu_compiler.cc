@@ -404,8 +404,6 @@ GpuThunkAotCompilationResult::LoadExecutable(
       ir_emitter->EmitHloComputation(hlo_module->entry_computation()));
   std::unique_ptr<ThunkSequence> thunk_sequence =
       ir_emitter->ConsumeThunkSequence();
-  ForAllThunks([](Thunk* thunk) { thunk->ClearCompileTimeInfo(); },
-               thunk_sequence.get());
 
   // Get all other fields required by GpuExecutable.
   std::vector<GpuExecutable::ConstantInfo> constants =
@@ -691,7 +689,8 @@ absl::Status RunOptimizationPasses(
   // handle it.
   pipeline.AddPass<ZeroSizedHloElimination>();
 
-  if (debug_options.xla_gpu_deterministic_ops()) {
+  if (debug_options.xla_gpu_deterministic_ops() ||
+      debug_options.xla_gpu_exclude_nondeterministic_ops()) {
     // Scatter can be indeterministic if indices are not unique or a non
     // associative combiner function is used. Eliminate these Scatter ops.
     pipeline.AddPass<ScatterExpander>(
@@ -1224,6 +1223,11 @@ absl::Status GpuCompiler::OptimizeHloModule(
     // duplicate or NOPs, so remove them with algebraic simplification and CSE.
     layout_normalization_pipeline.AddPass<HloPassFix<AlgebraicSimplifier>>(
         simplifier_options);
+    // Layout normalization will create broadcasts that are not canonical.
+    layout_normalization_pipeline.AddPass<BroadcastCanonicalizer>();
+    // Layout normalization will create scatters that are not simplified and
+    // also have unsorted update_window_dims.
+    layout_normalization_pipeline.AddPass<ScatterSimplifier>();
   }
   TF_RETURN_IF_ERROR(layout_normalization_pipeline.Run(hlo_module).status());
   // Run target-specific HLO optimization passes after layout assignment.
@@ -1376,6 +1380,9 @@ absl::Status GpuCompiler::OptimizeHloPostLayoutAssignment(
       // Remove any redundant operations (such as bitcasts) introduced by layout
       // normalization.
       pipeline.AddPass<HloPassFix<AlgebraicSimplifier>>(simplifier_options);
+      // Layout normalization will create scatters that are not simplified and
+      // also have unsorted update_window_dims.
+      pipeline.AddPass<ScatterSimplifier>();
     }
     pipeline.AddPass<BroadcastCanonicalizer>();
 
