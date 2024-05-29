@@ -66,10 +66,10 @@ cc_library(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "element_wise_row_vectorization_test",
     srcs = ["element_wise_row_vectorization_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         "//xla:error_spec",
         "//xla/tests:hlo_test_base",
@@ -77,14 +77,32 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "pred_arithmetic_test",
     srcs = ["pred_arithmetic_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:literal_util",
         "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/platform:test_main",
+    ],
+)
+
+xla_cc_test(
+    name = "async_kernel_launch_test",
+    srcs = ["async_kernel_launch_test.cc"],
+    # "requires-net:external" tag allows uploading `xprof` results.
+    tags = ["requires-net:external"] + tf_cuda_tests_tags(),
+    deps = [
+        "//xla:debug_options_flags",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla/service:gpu_plugin",
+        "//xla/service:hlo_module_config",
+        "//xla/tests:hlo_test_base",
+        "//xla/tests:literal_test_util",
+        "@com_google_googletest//:gtest_main",
         "@local_tsl//tsl/platform:test_main",
     ],
 )
@@ -142,11 +160,11 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_spmd_e2e_compile_test",
     size = "small",
     srcs = ["gpu_spmd_e2e_compile_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:debug_options_flags",
@@ -203,18 +221,17 @@ xla_test(
     ]),
 )
 
-xla_cc_test(
+xla_test(
     name = "gemm_broadcast_folding_rewrite_test",
     srcs = ["gemm_broadcast_folding_rewrite_test.cc"],
+    backends = ["gpu"],
     local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]) + if_rocm_is_configured([
         "TENSORFLOW_USE_ROCM=1",
     ]),
-    use_gpu = True,
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
         "//xla/hlo/ir:hlo",
-        "//xla/service:gpu_plugin",
         "//xla/service/gpu:gemm_broadcast_folding_rewriter",
         "//xla/service/gpu:gemm_rewriter",
         "@local_tsl//tsl/platform:statusor",
@@ -223,12 +240,12 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_too_many_blocks_test",
     srcs = [
         "gpu_too_many_blocks_test.cc",
     ],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla/hlo/ir:hlo",
@@ -261,16 +278,15 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "reduction_layout_normalizer_test",
     srcs = [
         "reduction_layout_normalizer_test.cc",
     ],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         "//xla:error_spec",
         "//xla/hlo/ir:hlo",
-        "//xla/service:gpu_plugin",
         "//xla/service:hlo_parser",
         "//xla/service/gpu:reduction_layout_normalizer",
         "//xla/tests:filecheck",
@@ -303,34 +319,32 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "swap_conv_operands_test",
     srcs = [
         "swap_conv_operands_test.cc",
     ],
+    backends = ["gpu"],
     tags = ["no_rocm"],
-    use_gpu = True,
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
-        "//xla/service:gpu_plugin",
         "@local_tsl//tsl/platform:test",
         "@local_tsl//tsl/platform:test_main",
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "reduction_vectorization_test",
     srcs = [
         "reduction_vectorization_test.cc",
     ],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
         "//xla:statusor",
         "//xla/hlo/ir:hlo",
-        "//xla/service:gpu_plugin",
         "//xla/service:hlo_module_config",
         "//xla/service:hlo_parser",
         "//xla/service/gpu:gpu_executable",
@@ -363,19 +377,18 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "parallel_reduction_test",
     srcs = [
         "parallel_reduction_test.cc",
     ],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
         "//xla:literal_util",
         "//xla:shape_util",
         "//xla/hlo/ir:hlo",
-        "//xla/service:gpu_plugin",
         "//xla/service:hlo_parser",
         "//xla/tests:filecheck",
         "//xla/tests:hlo_test_base",
@@ -385,12 +398,12 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_compilation_parallelism_test",
     srcs = [
         "gpu_compilation_parallelism_test.cc",
     ],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
@@ -402,10 +415,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_copy_test",
     srcs = ["gpu_copy_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
@@ -419,12 +432,12 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_copy_alone_test",
     srcs = [
         "gpu_copy_alone_test.cc",
     ],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
@@ -436,10 +449,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_dyn_shape_test",
     srcs = ["gpu_dyn_shape_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:shape_util",
@@ -473,10 +486,10 @@ xla_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_ftz_test",
     srcs = ["gpu_ftz_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:shape_util",
@@ -486,10 +499,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_index_test",
     srcs = ["gpu_index_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:comparison_util",
@@ -506,10 +519,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_infeed_test",
     srcs = ["infeed_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",  # build_cleaner: keep
         "//xla:array3d",
@@ -548,10 +561,10 @@ xla_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "concatenate_emitter_test",
     srcs = ["concatenate_emitter_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
@@ -561,10 +574,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "transpose_emitter_test",
     srcs = ["transpose_emitter_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
@@ -574,10 +587,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "reduction_emitter_test",
     srcs = ["reduction_emitter_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
@@ -587,10 +600,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_ldg_test",
     srcs = ["gpu_ldg_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:literal",
@@ -604,10 +617,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_noalias_test",
     srcs = ["gpu_noalias_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:literal",
@@ -619,10 +632,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_fusion_test",
     srcs = ["gpu_fusion_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:shape_util",
@@ -635,10 +648,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_fusion_pipeline_test",
     srcs = ["gpu_fusion_pipeline_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:shape_util",
@@ -654,10 +667,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_unrolling_test",
     srcs = ["gpu_unrolling_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:debug_options_flags",
@@ -668,15 +681,13 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_alignment_test",
-    testonly = True,
     srcs = ["gpu_alignment_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla/service:custom_call_target_registry",
-        "//xla/service:gpu_plugin",
         "//xla/service/llvm_ir:alias_analysis",
         "//xla/tests:filecheck",
         "@local_tsl//tsl/platform:test",
@@ -684,10 +695,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_atomic_test",
     srcs = ["gpu_atomic_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla/tests:filecheck",
@@ -696,10 +707,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_input_fusible_slice_test",
     srcs = ["gpu_input_fusible_slice_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
@@ -733,10 +744,10 @@ xla_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "select_and_scatter_test",
     srcs = ["select_and_scatter_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
@@ -745,13 +756,13 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "sorting_test",
     srcs = ["sorting_test.cc"],
+    backends = ["gpu"],
     local_defines = if_cuda_is_configured(["GOOGLE_CUDA=1"]) + if_rocm_is_configured([
         "TENSORFLOW_USE_ROCM=1",
     ]),
-    use_gpu = True,
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
@@ -811,9 +822,15 @@ lit_test_suite(
     args = if_cuda_is_configured([
         "--param=PTX=PTX",
         "--param=GPU=a6000",
+        "--param=GPU1=v100",
+        "--param=SM=CHECK-SM70",
+        "--param=GPU2=a100_80",
     ]) + if_rocm_is_configured([
         "--param=PTX=GCN",
         "--param=GPU=mi200",
+        "--param=GPU1=mi200",
+        "--param=GPU2=mi200",
+        "--param=SM=CHECK-SM80",
     ]),
     cfg = "//xla:lit.cfg.py",
     data = [
@@ -850,10 +867,10 @@ lit_test_suite(
 # )
 # copybara:uncomment_end
 
-xla_cc_test(
+xla_test(
     name = "kernel_launch_test",
     srcs = ["kernel_launch_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla:error_spec",
@@ -862,10 +879,10 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "mock_custom_call_test",
     srcs = ["mock_custom_call_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "//xla/tests:hlo_test_base",
@@ -873,22 +890,21 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "in_place_op_test",
     srcs = ["in_place_op_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         "//xla:debug_options_flags",
-        "//xla/service:gpu_plugin",
         "//xla/tests:hlo_test_base",
         "@local_tsl//tsl/platform:test_main",
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "dynamic_shared_memory_test",
     srcs = if_cuda_is_configured(["dynamic_shared_memory_test.cc"]),
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         "//xla:shape_util",
         "//xla:types",
@@ -1059,10 +1075,10 @@ xla_test(
     deps = [":simple_optimization_test"],
 )
 
-xla_cc_test(
+xla_test(
     name = "gpu_int4_test",
     srcs = ["gpu_int4_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         ":gpu_codegen_test",
         "@local_tsl//tsl/platform:test",
@@ -1070,25 +1086,23 @@ xla_cc_test(
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "simplify_fp_conversions_test",
     srcs = ["simplify_fp_conversions_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         "//xla:xla_proto_cc",
-        "//xla/service:gpu_plugin",
         "//xla/tests:hlo_test_base",
         "@local_tsl//tsl/platform:test_main",
     ],
 )
 
-xla_cc_test(
+xla_test(
     name = "nop_custom_call_test",
     srcs = ["nop_custom_call_test.cc"],
-    use_gpu = True,
+    backends = ["gpu"],
     deps = [
         "//xla:xla_proto_cc",
-        "//xla/service:gpu_plugin",
         "//xla/tests:hlo_test_base",
         "@local_tsl//tsl/platform:test_main",
     ],
