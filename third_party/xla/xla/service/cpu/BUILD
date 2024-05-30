@@ -63,7 +63,16 @@ filegroup(
 test_suite(
     name = "thunk_runtime_tests",
     tests = [
+        "//xla/tests:array_elementwise_ops_test_cpu",
+        "//xla/tests:axpy_simple_test_cpu",
+        "//xla/tests:convert_test_cpu",
         "//xla/tests:copy_test_cpu",
+        "//xla/tests:floor_ceil_test_cpu",
+        "//xla/tests:numerics_test_cpu",
+        "//xla/tests:reshape_test_cpu",
+        "//xla/tests:reverse_test_cpu",
+        "//xla/tests:unary_op_test_cpu",
+        "//xla/tests/exhaustive:exhaustive_binary_16_bit_test_cpu",
     ],
 )
 
@@ -649,6 +658,7 @@ cc_library(
         "//xla:shape_util",
         "//xla/hlo/ir:hlo",
         "//xla/service:elemental_ir_emitter",
+        "//xla/service/llvm_ir:fused_ir_emitter",
         "//xla/service/llvm_ir:ir_array",
         "//xla/service/llvm_ir:llvm_util",
         "//xla/service/llvm_ir:loop_emitter",
@@ -661,6 +671,7 @@ cc_library(
         "@llvm-project//llvm:Support",
         "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:logging",
+        "@local_tsl//tsl/platform:statusor",
     ],
 )
 
@@ -672,6 +683,7 @@ xla_cc_test(
         "//xla:shape_util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
+        "//xla/service:hlo_module_config",
         "//xla/service:hlo_parser",
         "//xla/service/llvm_ir:llvm_util",
         "//xla/tests:filecheck",
@@ -816,6 +828,7 @@ cc_library(
         "//xla:shape_util",
         "//xla/hlo/ir:hlo",
         "//xla/service:buffer_assignment",
+        "//xla/service/cpu/runtime:call_thunk",
         "//xla/service/cpu/runtime:copy_thunk",
         "//xla/service/cpu/runtime:kernel_thunk",
         "//xla/service/cpu/runtime:thunk",
