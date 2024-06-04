@@ -36,6 +36,7 @@ cc_library(
     hdrs = ["thunk.h"],
     deps = [
         ":buffer_allocations",
+        "//xla/service/cpu:cpu_runtime",
         "//xla/stream_executor/host:host_kernel_c_api",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
@@ -117,6 +118,27 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "infeed_thunk",
+    srcs = ["infeed_thunk.cc"],
+    hdrs = ["infeed_thunk.h"],
+    deps = [
+        ":thunk",
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla/service:buffer_assignment",
+        "//xla/service/cpu:cpu_runtime",
+        "//xla/stream_executor",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/types:span",
+        "@local_tsl//tsl/platform:logging",
+        "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/profiler/lib:traceme",
+    ],
+)
+
 xla_cc_test(
     name = "kernel_thunk_test",
     srcs = ["kernel_thunk_test.cc"],
@@ -132,6 +154,27 @@ xla_cc_test(
         "@local_tsl//tsl/lib/core:status_test_util",
         "@local_tsl//tsl/platform:test",
         "@local_tsl//tsl/platform:test_main",
+    ],
+)
+
+cc_library(
+    name = "rng_state_thunk",
+    srcs = ["rng_state_thunk.cc"],
+    hdrs = ["rng_state_thunk.h"],
+    deps = [
+        ":thunk",
+        "//xla:util",
+        "//xla/service:buffer_assignment",
+        "//xla/stream_executor",
+        "@com_google_absl//absl/base:config",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/numeric:int128",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@local_tsl//tsl/platform:logging",
+        "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/profiler/lib:traceme",
     ],
 )
 
