@@ -1,49 +1,23 @@
 Auto generated patch. Do not edit or delete it, even if empty.
-diff -ruN --strip-trailing-cr a/clang/lib/Interpreter/IncrementalParser.cpp b/clang/lib/Interpreter/IncrementalParser.cpp
---- a/clang/lib/Interpreter/IncrementalParser.cpp
-+++ b/clang/lib/Interpreter/IncrementalParser.cpp
-@@ -413,7 +413,8 @@
-     if (!ND)
-       continue;
-     // Check if we need to clean up the IdResolver chain.
--    if (ND->getDeclName().getFETokenInfo())
-+    if (ND->getDeclName().getFETokenInfo() && !D->getLangOpts().ObjC &&
-+        !D->getLangOpts().CPlusPlus)
-       getCI()->getSema().IdResolver.RemoveDecl(ND);
-   }
- }
-diff -ruN --strip-trailing-cr a/clang/lib/Sema/SemaDecl.cpp b/clang/lib/Sema/SemaDecl.cpp
---- a/clang/lib/Sema/SemaDecl.cpp
-+++ b/clang/lib/Sema/SemaDecl.cpp
-@@ -2287,7 +2287,8 @@
-     // Partial translation units that are created in incremental processing must
-     // not clean up the IdResolver because PTUs should take into account the
-     // declarations that came from previous PTUs.
--    if (!PP.isIncrementalProcessingEnabled() || getLangOpts().ObjC)
-+    if (!PP.isIncrementalProcessingEnabled() || getLangOpts().ObjC ||
-+        getLangOpts().CPlusPlus)
-       IdResolver.RemoveDecl(D);
+diff -ruN --strip-trailing-cr a/lldb/test/API/functionalities/stats_api/TestStatisticsAPI.py b/lldb/test/API/functionalities/stats_api/TestStatisticsAPI.py
+--- a/lldb/test/API/functionalities/stats_api/TestStatisticsAPI.py
++++ b/lldb/test/API/functionalities/stats_api/TestStatisticsAPI.py
+@@ -85,14 +85,15 @@
+         stats_summary.GetAsJSON(stream_summary)
+         debug_stats_summary = json.loads(stream_summary.GetData())
+         self.assertNotIn("modules", debug_stats_summary)
+-        self.assertNotIn("memory", debug_stats_summary)
+         self.assertNotIn("commands", debug_stats_summary)
  
-     // Warn on it if we are shadowing a declaration.
-diff -ruN --strip-trailing-cr a/utils/bazel/llvm-project-overlay/libc/BUILD.bazel b/utils/bazel/llvm-project-overlay/libc/BUILD.bazel
---- a/utils/bazel/llvm-project-overlay/libc/BUILD.bazel
-+++ b/utils/bazel/llvm-project-overlay/libc/BUILD.bazel
-@@ -319,6 +319,7 @@
-     name = "__support_cpp_expected",
-     hdrs = ["src/__support/CPP/expected.h"],
-     deps = [
-+        ":__support_macros_attributes",
-     ],
- )
+         # Summary values should be the same as in full statistics.
+-        # Except the parse time on Mac OS X is not deterministic.
++        # The exceptions to this are:
++        # - The parse time on Mac OS X is not deterministic.
++        # - Memory usage may grow over time due to the use of ConstString.
+         for key, value in debug_stats_summary.items():
+             self.assertIn(key, debug_stats)
+-            if key != "targets" and not key.endswith("Time"):
++            if key != "memory" and key != "targets" and not key.endswith("Time"):
+                 self.assertEqual(debug_stats[key], value)
  
-diff -ruN --strip-trailing-cr a/utils/bazel/llvm-project-overlay/llvm/BUILD.bazel b/utils/bazel/llvm-project-overlay/llvm/BUILD.bazel
---- a/utils/bazel/llvm-project-overlay/llvm/BUILD.bazel
-+++ b/utils/bazel/llvm-project-overlay/llvm/BUILD.bazel
-@@ -287,6 +287,7 @@
-     linkopts = select({
-         "@platforms//os:windows": [
-             "ws2_32.lib",
-+            "ntdll.lib",
-         ],
-         "@platforms//os:freebsd": [
-             "-pthread",
+     def test_command_stats_api(self):
