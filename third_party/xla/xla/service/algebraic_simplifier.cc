@@ -4163,6 +4163,22 @@ absl::Status AlgebraicSimplifierVisitor::HandleGather(HloInstruction* gather) {
       }
     }
   }
+
+  if (gather->gather_dimension_numbers().index_vector_dim() <
+          gather->operand(1)->shape().rank() &&
+      gather->gather_dimension_numbers().start_index_map_size() == 1) {
+    Shape updated_shape = ShapeUtil::DeleteDimension(
+        gather->gather_dimension_numbers().index_vector_dim(),
+        gather->operand(1)->shape());
+    Cast<HloGatherInstruction>(gather)
+        ->mutable_gather_dimension_numbers()
+        ->set_index_vector_dim(updated_shape.rank());
+    TF_RETURN_IF_ERROR(gather->ReplaceOperandWithDifferentShape(
+        1, gather->mutable_operand(1)->AddInstruction(
+               HloInstruction::CreateReshape(updated_shape,
+                                             gather->mutable_operand(1)))));
+    MarkAsChanged();
+  }
   return absl::OkStatus();
 }
 
@@ -5145,6 +5161,16 @@ absl::Status AlgebraicSimplifierVisitor::HandleCustomCall(
       pad_to_static0 == pad_to_static1 &&
       SameShape(custom_call->shape(), pad_to_static_operand->shape())) {
     return ReplaceInstruction(custom_call, pad_to_static_operand);
+  }
+  if (options_.is_layout_sensitive() &&
+      custom_call->IsCustomCall("LayoutConstraint")) {
+    if (SameShape(custom_call->shape(), custom_call->operand(0)->shape())) {
+      return ReplaceInstruction(custom_call, custom_call->mutable_operand(0));
+    }
+    return ReplaceWithNewInstruction(
+        custom_call,
+        HloInstruction::CreateUnary(custom_call->shape(), HloOpcode::kCopy,
+                                    custom_call->mutable_operand(0)));
   }
   return absl::OkStatus();
 }
