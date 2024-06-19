@@ -17,7 +17,6 @@ limitations under the License.
 
 #include <array>
 #include <climits>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -167,7 +166,7 @@ using mlir::ValueRange;
 namespace {
 
 // XLA -> Triton type conversions.
-Type TritonType(mlir::OpBuilder b, PrimitiveType t) {
+absl::StatusOr<Type> TritonType(mlir::OpBuilder b, PrimitiveType t) {
   switch (t) {
     case F64:
       return b.getF64Type();
@@ -195,8 +194,9 @@ Type TritonType(mlir::OpBuilder b, PrimitiveType t) {
       // Triton.
       return b.getFloat8E4M3FNUZType();
     default:
-      LOG(FATAL) << "This type is not supported yet: "
-                 << primitive_util::LowercasePrimitiveTypeName(t);
+      return absl::UnimplementedError(
+          absl::StrCat("This type is not supported yet: ",
+                       primitive_util::LowercasePrimitiveTypeName(t)));
   }
 }
 
@@ -485,8 +485,11 @@ absl::StatusOr<Value> EmitElementwise(ImplicitLocOpBuilder& b,
     case HloOpcode::kNegate:
       // NegFOp is not supported by Triton.
       return Subtract(b, {ZerosLike(b, inputs[0]), inputs[0]});
-    case HloOpcode::kConvert:
-      return Cast(b, inputs[0], TritonType(b, hlo.shape().element_type()));
+    case HloOpcode::kConvert: {
+      TF_ASSIGN_OR_RETURN(Type dst_ty,
+                          TritonType(b, hlo.shape().element_type()));
+      return Cast(b, inputs[0], dst_ty);
+    }
     case HloOpcode::kAdd:
       if (is_integer) {
         return b.create<ma::AddIOp>(inputs[0], inputs[1]);
@@ -577,8 +580,9 @@ Value EmitParameterLoad(ImplicitLocOpBuilder& b, Value pointer,
                {});
 }
 
-Value EmitConstant(ImplicitLocOpBuilder& b, const HloInstruction& constant) {
-  Type ty = TritonType(b, constant.shape().element_type());
+absl::StatusOr<Value> EmitConstant(ImplicitLocOpBuilder& b,
+                                   const HloInstruction& constant) {
+  TF_ASSIGN_OR_RETURN(Type ty, TritonType(b, constant.shape().element_type()));
   if (constant.shape().IsInteger()) {
     if (constant.shape().element_type() == U64) {
       return CreateConst(b, ty, ScalarConstantValue<uint64_t>(constant, U64));
@@ -681,13 +685,14 @@ absl::StatusOr<Value> EmitReduce(ImplicitLocOpBuilder& b,
   if (operand->opcode() == HloOpcode::kConvert) {
     TF_RET_CHECK(operand->operand(0)->opcode() == HloOpcode::kConstant);
     TF_RET_CHECK(operand->operand(0)->shape().element_type() == BF16);
-    PrimitiveType dest_ty = operand->shape().element_type();
-    TF_RET_CHECK(dest_ty == F32);
-    neutral = EmitConstant(b, *operand->operand(0));
-    neutral = Cast(b, neutral, TritonType(b, dest_ty));
+    TF_RET_CHECK(operand->shape().element_type() == F32);
+    TF_ASSIGN_OR_RETURN(Type dst_ty,
+                        TritonType(b, operand->shape().element_type()));
+    TF_ASSIGN_OR_RETURN(neutral, EmitConstant(b, *operand->operand(0)));
+    neutral = Cast(b, neutral, dst_ty);
   } else {
     TF_RET_CHECK(operand->opcode() == HloOpcode::kConstant);
-    neutral = EmitConstant(b, *operand);
+    TF_ASSIGN_OR_RETURN(neutral, EmitConstant(b, *operand));
   }
 
   // Since every shape is padded to a power of 2 in Triton, the input tile may
@@ -756,7 +761,9 @@ absl::StatusOr<Value> EmitReduce(ImplicitLocOpBuilder& b,
     result = Splat(b, result, {});
   }
 
-  return Cast(b, result, TritonType(b, hlo_reduce.shape().element_type()));
+  TF_ASSIGN_OR_RETURN(Type result_ty,
+                      TritonType(b, hlo_reduce.shape().element_type()));
+  return Cast(b, result, result_ty);
 }
 
 // Emit code corresponding to a fusion instruction somehow nested within the
@@ -873,8 +880,9 @@ absl::StatusOr<Value> EmitTiledHloInstruction(
 
   if (hlo->opcode() == HloOpcode::kConstant &&
       ShapeUtil::IsEffectiveScalar(hlo->shape())) {
+    TF_ASSIGN_OR_RETURN(Value constant, EmitConstant(b, *hlo));
     // Splat makes it a tensor to avoid type mismatches.
-    return Splat(b, EmitConstant(b, *hlo), {});
+    return Splat(b, constant, {});
   }
 
   if (hlo->opcode() == HloOpcode::kBroadcast) {
@@ -896,16 +904,18 @@ absl::StatusOr<Value> EmitTiledHloInstruction(
     return EmitElementwise(b, libdevice_path, device_info, *hlo, operands);
   }
 
-  if (hlo->opcode() == HloOpcode::kTranspose ||
-      hlo->opcode() == HloOpcode::kSlice || hlo->opcode() == HloOpcode::kPad) {
-    // All these are currently supported only as operations on indices
-    // which are pushed to loads and stores. No operations on tiles are
-    // performed here.
+  // All these operations are currently supported only as operations on indices
+  // which are pushed to loads and stores. We don't generate any further code
+  // for these operations here.
+  std::vector<HloOpcode> passthrough_opcodes(
+      {HloOpcode::kBitcast, HloOpcode::kPad, HloOpcode::kReshape,
+       HloOpcode::kSlice, HloOpcode::kTranspose});
+  if (absl::c_linear_search(passthrough_opcodes, hlo->opcode())) {
     return values[tiled_hlo.operand(0)];
   }
 
   return absl::UnimplementedError(
-      absl::StrCat("Unsupported opcode: ", hlo->opcode()));
+      absl::StrCat("Unsupported operation ", hlo->ToString()));
 }
 
 // Emit sequence of instructions using compatible tiling ordered producers
@@ -954,8 +964,9 @@ absl::StatusOr<Value> EmitScope(
       TF_RET_CHECK(values.contains(hlo)) << hlo->ToString();
       continue;
     } else if (hlo->opcode() == HloOpcode::kConstant) {
+      TF_ASSIGN_OR_RETURN(Value constant, EmitConstant(b, *hlo));
       // Splat makes it a tensor to avoid type mismatches.
-      result = Splat(b, EmitConstant(b, *hlo), {});
+      result = Splat(b, constant, {});
     } else if (hlo->opcode() == HloOpcode::kBroadcast) {
       TF_ASSIGN_OR_RETURN(
           result, EmitBroadcast(b, analysis, scope, tiled_dimensions, *hlo,
@@ -1362,12 +1373,13 @@ class MatMulEmitterHelper {
 
   // TODO(b/266862493): Accumulator can be integer too.
   // Otherwise only f64 x f64 -> f64 uses f64 accumulator.
-  mlir::FloatType GetDotAccumulatorType() {
+  absl::StatusOr<mlir::FloatType> GetDotAccumulatorType() {
     const PrecisionConfig::Algorithm algorithm =
         dot_instr_->precision_config().algorithm();
 
     if (algorithm == PrecisionConfig::ALG_UNSET) {
-      Type dot_output_ty = TritonType(b_, dot_instr_->shape().element_type());
+      TF_ASSIGN_OR_RETURN(Type dot_output_ty,
+                          TritonType(b_, dot_instr_->shape().element_type()));
       // The code below assumes that lhs and rhs have the same type. However
       // it's not always the case with fp8 matmuls, e.g. e4m3×e5m2 is supported
       // at the hardware level. NVidia GPU currently only supports f32
@@ -1377,14 +1389,14 @@ class MatMulEmitterHelper {
       }
 
       // Data type of dot() immediate inputs.
-      Type dot_input_ty = [&] {
-        const Type lhs_ty =
-            TritonType(b_, dot_instr_->operand(0)->shape().element_type());
-        const Type rhs_ty =
-            TritonType(b_, dot_instr_->operand(1)->shape().element_type());
-        CHECK(lhs_ty == rhs_ty);
-        return lhs_ty;
-      }();
+      TF_ASSIGN_OR_RETURN(
+          const Type lhs_ty,
+          TritonType(b_, dot_instr_->operand(0)->shape().element_type()));
+      TF_ASSIGN_OR_RETURN(
+          const Type rhs_ty,
+          TritonType(b_, dot_instr_->operand(1)->shape().element_type()));
+      TF_RET_CHECK(lhs_ty == rhs_ty);
+      Type dot_input_ty = lhs_ty;
       // TODO(b/266862493): Accumulator can be integer too.
       // Otherwise only f64 x f64 -> f64 uses f64 accumulator.
       return (dot_output_ty.isF64() && dot_input_ty.isF64()) ? b_.getF64Type()
@@ -1395,7 +1407,8 @@ class MatMulEmitterHelper {
         algorithm_util::GetDotAccumulatorType(algorithm);
     CHECK(accum_type.ok()) << "Unexpected algorithm: "
                            << PrecisionConfig::Algorithm_Name(algorithm);
-    Type mlir_accum_type = TritonType(b_, accum_type.value());
+    TF_ASSIGN_OR_RETURN(Type mlir_accum_type,
+                        TritonType(b_, accum_type.value()));
     if (auto float_accum_type =
             mlir::dyn_cast<mlir::FloatType>(mlir_accum_type)) {
       return float_accum_type;
@@ -2131,10 +2144,9 @@ absl::Status EmitMatMul(mlir::OpBuilder builder,
         if (node->opcode() != HloOpcode::kConvert) {
           return false;
         }
-        Type in_type =
-            TritonType(builder, node->operand(0)->shape().element_type());
-        Type out_type = TritonType(builder, node->shape().element_type());
-        return in_type.getIntOrFloatBitWidth() <= 8 && out_type.isF32();
+        int in_width =
+            primitive_util::BitWidth(node->operand(0)->shape().element_type());
+        return in_width <= 8 && node->shape().element_type() == F32;
       });
 
   // We'll be creating a lot of instructions from a single dot, use an
@@ -2181,7 +2193,7 @@ absl::Status EmitMatMul(mlir::OpBuilder builder,
   auto pid_n = b.create<ma::DivSIOp>(b.create<ma::RemSIOp>(pid_nc, c32(width)),
                                      group_size);
 
-  mlir::FloatType acc_ty = emitter.GetDotAccumulatorType();
+  TF_ASSIGN_OR_RETURN(mlir::FloatType acc_ty, emitter.GetDotAccumulatorType());
 
   ma::ConstantOp accumulator_init =
       CreateConst(b, acc_ty, 0, {block_m, block_n});
@@ -2229,8 +2241,17 @@ absl::Status EmitMatMul(mlir::OpBuilder builder,
   size_t lsize = ScopeInputs(analysis, TritonFusionAnalysis::Scope::LHS).size();
   size_t rsize = ScopeInputs(analysis, TritonFusionAnalysis::Scope::RHS).size();
 
+  absl::flat_hash_map<const HloInstruction*, Type> triton_type_for_input;
+  for (const Side& side : {lhs, rhs}) {
+    for (const HloInstruction* input : ScopeInputs(analysis, side.scope)) {
+      TF_ASSIGN_OR_RETURN(Type input_ty,
+                          TritonType(b, input->shape().element_type()));
+      triton_type_for_input.insert({input, input_ty});
+    }
+  }
+
   auto body_builder = [&](mlir::OpBuilder&, mlir::Location, Value ki,
-                          ValueRange iter_args) {
+                          ValueRange iter_args) -> void {
     SmallVector<Value> iter_args_next;
     iter_args_next.reserve(iter_args.size());
     std::array<absl::flat_hash_map<const HloInstruction*, Value>, 3> values;
@@ -2243,7 +2264,7 @@ absl::Status EmitMatMul(mlir::OpBuilder builder,
       const HloInstruction* param_hlo = iter_args_to_inputs[i];
       Type param_ty = index == kLhsMetaOperandIdx
                           ? b.getI16Type()
-                          : TritonType(b, param_hlo->shape().element_type());
+                          : triton_type_for_input.at(param_hlo);
       Type param_storage_ty = StorageType(b, param_ty);
       Value param_value =
           EmitParameterLoad(b, iter_args[i], iter_args_to_boundary_checks[i]);
@@ -2364,6 +2385,7 @@ absl::Status EmitMatMul(mlir::OpBuilder builder,
     iter_args_next.push_back(accumulator_next);
 
     b.create<mlir::scf::YieldOp>(iter_args_next);
+    return;
   };
 
   // Pointers to inputs of LHS scope, then RHS, then the accumulator
@@ -2393,8 +2415,9 @@ absl::Status EmitMatMul(mlir::OpBuilder builder,
                          /*iterArgs=*/iter_args, body_builder)
                         .getResult(iter_args.size() - 1);
   absl::flat_hash_map<const HloInstruction*, Value> values_out;
-  values_out[dot_instr] =
-      Cast(b, acc_final, TritonType(b, dot_instr->shape().element_type()));
+  TF_ASSIGN_OR_RETURN(Type acc_final_ty,
+                      TritonType(b, dot_instr->shape().element_type()));
+  values_out[dot_instr] = Cast(b, acc_final, acc_final_ty);
 
   // Emit the output scope.
   if (std::vector<const HloInstruction*> to_emit =
@@ -2562,155 +2585,6 @@ absl::Status EmitGeneric(mlir::OpBuilder builder,
   return absl::OkStatus();
 }
 
-absl::Status EmitSoftMax(mlir::OpBuilder builder,
-                         absl::string_view libdevice_path,
-                         const se::DeviceDescription& device_info,
-                         const HloFusionInstruction* fusion,
-                         mlir::triton::FuncOp fn, const BlockLevelParameters&) {
-  const HloComputation* computation = fusion->fused_instructions_computation();
-  // TODO(b/332649307): Remove the fallback on the legacy triton analysis once
-  //  the symbolic tile analysis can handle all cases.
-  TF_ASSIGN_OR_RETURN(TritonFusionAnalysis analysis,
-                      TritonFusionAnalysis::Execute(*computation));
-
-  const HloInstruction* root = computation->root_instruction();
-  auto loc = mlir::NameLoc::get(builder.getStringAttr(root->name()));
-  ImplicitLocOpBuilder b(loc, builder);
-
-  // Assumptions we make about the matcher:
-  //   * matches Softmax "diamonds" on the last axis, along with any number of
-  //     elementwise operations/bitcasts on any edge
-  //   * within a given fusion, every argument to a Softmax diamond has the same
-  //     shape
-  //   * every reduction is on the last axis
-  //   * the last axis of every reduction parameter has the same length
-  //   * reductions only reduce a single operand
-  //   * all the shapes have canonical layout (logical layout = physical layout)
-  //   * the computation has a single output
-  //   * we tile along a single dimension
-
-  // TODO(bchetioui): allow doing several rows per block (e.g. for when rows
-  // are smaller than the minimum transaction size)
-
-  const HloInstruction* reduce = hlo_query::GetFirstInstructionWithOpcode(
-      *computation, HloOpcode::kReduce);
-
-  TF_RET_CHECK(reduce != nullptr);
-
-  Shape reduce_input_shape = reduce->operand(0)->shape();
-
-  TF_RET_CHECK(reduce->opcode() == HloOpcode::kReduce);
-  TF_RET_CHECK(reduce->dimensions().size() == 1);
-  TF_RET_CHECK(reduce->dimensions()[0] == reduce_input_shape.rank() - 1);
-
-  int row_len = reduce_input_shape.dimensions_minor(0);
-
-  Value pid = b.create<ma::ExtSIOp>(
-      b.getI64Type(), b.create<mt::GetProgramIdOp>(mt::ProgramIDDim::X));
-  Value row_stride = CreateConst(b, b.getI32Type(), row_len);
-
-  Value row_offset = b.create<ma::MulIOp>(
-      pid, b.create<ma::ExtSIOp>(b.getI64Type(), row_stride));
-  Value zero_offset = CreateConst(b, b.getI64Type(), 0);
-
-  absl::flat_hash_map<const HloInstruction*, Value> values_out;
-  std::vector<int32_t> boundary_checks;
-
-  // block_size must be a power of two.
-  int result_block_size = pow(2, ceil(log(row_len) / log(2)));
-
-  if (result_block_size != row_len) {
-    boundary_checks.push_back(0);
-  }
-
-  // Emits load instructions
-  for (int param_idx = 0; param_idx < computation->num_parameters();
-       ++param_idx) {
-    HloInstruction* param = computation->parameter_instruction(param_idx);
-    // Current tiling derivation assigns index 0 to the reduction dimension and
-    // index 1 to the batch dimension.
-    auto reduce_iterspec = analysis.IterSpec(
-        TritonFusionAnalysis::Scope::OUTPUT, param, /*dimension=*/0);
-    auto batch_iterspec = analysis.IterSpec(TritonFusionAnalysis::Scope::OUTPUT,
-                                            param, /*dimension=*/1);
-
-    // Make sure only batch and reduce dims are present in tiling
-    TF_RET_CHECK(analysis.IterSpec(TritonFusionAnalysis::Scope::OUTPUT, param,
-                                   /*dimension=*/2) == nullptr);
-
-    if (!reduce_iterspec) {
-      // This parameter's broadcast is along the reduce dimension, and so
-      // each pid uses and broadcasts its own index.
-
-      // If batchDimIterSpec is also not present, then this parameter is a
-      // scalar, in which case we reuse this for each pid with offset.
-      Value batch_offset = batch_iterspec ? pid : zero_offset;
-
-      values_out[param] = EmitParameterLoad(
-          b, AddPtr(b, fn.getArgument(param_idx), batch_offset),
-          boundary_checks);
-      continue;
-    }
-
-    TF_RET_CHECK(reduce_iterspec != nullptr);
-    TF_RET_CHECK(reduce_iterspec->size() == 1);
-
-    // TODO(b/310721908): The below assumes that we tile along a single dim.
-    int reduce_dim_len = reduce_iterspec->front().count;
-    int reduce_dim_stride = reduce_iterspec->front().stride;
-    int slice_offset = reduce_iterspec->front().slice_start;
-
-    // If the batch dimension is present in this parameter's tile, we must make
-    // sure each batch idx is offset by the correct number of rows. If it is not
-    // present, then the reduce dim data is reused without any offset.
-    Value base_offset = batch_iterspec ? row_offset : zero_offset;
-
-    // We assume that the reduced axis of this parameter has length row_len.
-    // TODO(b/316637896): Relax assumption that param reduce_dim_len == row_len.
-    TF_RET_CHECK(reduce_dim_len == row_len);
-
-    // block_size must be a power of two.
-    int block_size = pow(2, ceil(log(reduce_dim_len) / log(2)));
-
-    // Verify that this param contains a single contiguous fragment.
-    TF_RET_CHECK(reduce_iterspec->front().subfragments.size() == 1);
-
-    Value emitted_tensor = b.create<mt::MakeTensorPtrOp>(
-        /*base=*/AddPtr(b, fn.getArgument(param_idx), base_offset),
-        /*shape=*/ValueRange{CreateConst(b, b.getI64Type(), reduce_dim_len)},
-        /*strides=*/
-        ValueRange{CreateConst(b, b.getI64Type(), reduce_dim_stride)},
-        /*offsets=*/ValueRange{CreateConst(b, b.getI32Type(), slice_offset)},
-        /*tensorShape=*/std::vector<int32_t>{block_size},
-        /*order=*/std::vector<int32_t>{0});
-
-    values_out[param] = EmitParameterLoad(b, emitted_tensor, boundary_checks);
-  }
-
-  // Dimension 0 is the reduced one by construction and it's the only one
-  // present in the tile shapes.
-  std::vector<DimProperties> tiled_dims = {DimProperties(
-      /*index=*/0, pid, result_block_size, /*split_value=*/1)};
-  TF_ASSIGN_OR_RETURN(
-      Value result,
-      EmitScope(b, libdevice_path, device_info, &analysis,
-                TritonFusionAnalysis::Scope::OUTPUT, tiled_dims,
-                computation->MakeInstructionPostOrder(), values_out));
-
-  Value store_tensor = b.create<mt::MakeTensorPtrOp>(
-      /*base=*/AddPtr(b, fn.getArgument(computation->num_parameters()),
-                      row_offset),
-      /*shape=*/ValueRange{CreateConst(b, b.getI64Type(), row_len)},
-      /*strides=*/ValueRange{CreateConst(b, b.getI64Type(), 1)},
-      /*offsets=*/ValueRange{CreateConst(b, b.getI32Type(), 0)},
-      /*tensorShape=*/std::vector<int32_t>{result_block_size},
-      /*order=*/std::vector<int32_t>{0});
-
-  b.create<mt::StoreOp>(store_tensor, result, std::vector<int32_t>{0},
-                        mt::CacheModifier::NONE, mt::EvictionPolicy::NORMAL);
-  return absl::OkStatus();
-}
-
 void LoadMlirDialectsForTriton(mlir::MLIRContext& mlir_context) {
   mlir_context.loadDialect<
       mt::TritonDialect, mt::gpu::TritonGPUDialect, mlir::arith::ArithDialect,
@@ -2774,16 +2648,21 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> CreateTritonModule(
   SmallVector<Type> fn_arg_types;
   for (HloInstruction* p : hlo_computation->parameter_instructions()) {
     PrimitiveType type = p->shape().element_type();
-    Type ir_type = type != U16 ? TritonType(b, type) : b.getI16Type();
+    Type ir_type;
+    if (type == U16) {
+      ir_type = b.getI16Type();
+    } else {
+      TF_ASSIGN_OR_RETURN(ir_type, TritonType(b, type));
+    }
     fn_arg_types.push_back(
         mt::PointerType::get(StorageType(b, ir_type), mn::kGlobalMemorySpace));
   }
 
   for (const ShapeUtil::IndexedShape& s :
        ShapeUtil::GetLeafShapes(fusion->shape())) {
-    fn_arg_types.push_back(mt::PointerType::get(
-        StorageType(b, TritonType(b, s.shape.element_type())),
-        mn::kGlobalMemorySpace));
+    TF_ASSIGN_OR_RETURN(Type triton_ty, TritonType(b, s.shape.element_type()));
+    fn_arg_types.push_back(mt::PointerType::get(StorageType(b, triton_ty),
+                                                mn::kGlobalMemorySpace));
   }
 
   auto fn = b.create<mt::FuncOp>(loc, fn_name,
@@ -2804,11 +2683,6 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> CreateTritonModule(
   if (fusion_kind == kTritonGemmFusionKind) {
     TF_RETURN_IF_ERROR(EmitMatMul(b, libdevice_path, device_info, fusion, fn,
                                   block_level_parameters));
-  } else if (fusion_kind == kTritonSoftmaxFusionKind) {
-    TF_ASSIGN_OR_RETURN(TritonFusionAnalysis analysis,
-                        TritonFusionAnalysis::Execute(*hlo_computation));
-    TF_RETURN_IF_ERROR(EmitSoftMax(b, libdevice_path, device_info, fusion, fn,
-                                   block_level_parameters));
   } else if (fusion_kind == kTritonFusionKind) {
     TF_RETURN_IF_ERROR(EmitGeneric(b, libdevice_path, device_info, fusion, fn,
                                    block_level_parameters));
