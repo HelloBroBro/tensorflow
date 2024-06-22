@@ -146,7 +146,6 @@ cc_library(
         "//xla:literal_util",
         "//xla:shape_util",
         "//xla:status_macros",
-        "//xla:statusor",
         "//xla:types",
         "//xla:util",
         "//xla/service:hlo_cost_analysis",
@@ -154,6 +153,7 @@ cc_library(
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:logging",
         "@local_tsl//tsl/platform:notification",
@@ -171,7 +171,6 @@ cc_library(
         "//xla:literal_util",
         "//xla:shape_util",
         "//xla:status_macros",
-        "//xla:statusor",
         "//xla:types",
         "//xla:util",
         "//xla:xla_data_proto_cc",
@@ -182,6 +181,7 @@ cc_library(
         "//xla/stream_executor:platform_manager",
         "//xla/stream_executor/host:host_platform_id",
         "@com_google_absl//absl/base",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:span",
         "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:logging",
@@ -233,7 +233,6 @@ cc_library(
         "//xla:protobuf_util",
         "//xla:shape_util",
         "//xla:status_macros",
-        "//xla:statusor",
         "//xla:types",
         "//xla:util",
         "//xla:xla_data_proto_cc",
@@ -406,7 +405,6 @@ cc_library(
         ":target_machine_features",
         ":xla_framework",
         "//xla:cpu_function_runtime",
-        "//xla:statusor",
         "//xla:util",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/ir:hlo_module_group",
@@ -420,6 +418,7 @@ cc_library(
         "//xla/stream_executor",
         "//xla/stream_executor/host:host_platform_id",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@llvm-project//llvm:Target",
     ],
     alwayslink = True,  # Contains compiler registration
@@ -550,7 +549,6 @@ cc_library(
         "//xla:shape_tree",
         "//xla:shape_util",
         "//xla:status_macros",
-        "//xla:statusor",
         "//xla:types",
         "//xla:util",
         "//xla:xla_data_proto_cc",
@@ -696,7 +694,6 @@ cc_library(
         "//xla:literal_util",
         "//xla:shape_util",
         "//xla:status_macros",
-        "//xla:statusor",
         "//xla:types",
         "//xla:util",
         "//xla:window_util",
@@ -724,6 +721,7 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/meta:type_traits",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",
@@ -733,6 +731,7 @@ cc_library(
         "@local_tsl//tsl/lib/math:math_util",
         "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:logging",
+        "@local_tsl//tsl/platform:statusor",
     ],
 )
 
@@ -771,10 +770,10 @@ cc_library(
         ":shape_partition",
         "//xla:shape_util",
         "//xla:status_macros",
-        "//xla:statusor",
         "//xla:types",
         "//xla/service:hlo_module_config",
         "//xla/service/llvm_ir:llvm_util",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@llvm-project//llvm:Core",
@@ -802,6 +801,7 @@ cc_library(
     hdrs = ["thunk_emitter.h"],
     deps = [
         ":dot_op_emitter",
+        ":ir_emission_utils",
         ":ir_emitter2",
         ":target_machine_features",
         "//xla:cpu_function_runtime",
@@ -819,6 +819,7 @@ cc_library(
         "//xla/service/cpu/runtime:collective_permute_thunk",
         "//xla/service/cpu/runtime:collective_thunk",
         "//xla/service/cpu/runtime:conditional_thunk",
+        "//xla/service/cpu/runtime:convolution_thunk",
         "//xla/service/cpu/runtime:copy_thunk",
         "//xla/service/cpu/runtime:custom_call_thunk",
         "//xla/service/cpu/runtime:dot_thunk",
@@ -908,7 +909,6 @@ xla_cc_binary(
     deps = [
         "//xla:array4d",
         "//xla:literal",
-        "//xla:statusor",
         "//xla:types",
         "//xla:xla_data_proto_cc",
         "//xla/client",
@@ -917,6 +917,7 @@ xla_cc_binary(
         "//xla/client:local_client",
         "//xla/client:xla_builder",
         "//xla/client:xla_computation",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
         "@local_tsl//tsl/platform:logging",
         "@local_tsl//tsl/platform:platform_port",
@@ -930,12 +931,12 @@ cc_library(
     deps = [
         ":cpu_runtime",
         ":llvm_ir_runtime",
-        "//xla:statusor",
         "//xla:types",
         "//xla:util",
         "//xla/service:llvm_compiler",
         "//xla/service/llvm_ir:llvm_util",
         "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/status:statusor",
         "@llvm-project//llvm:Analysis",
         "@llvm-project//llvm:Core",
         "@llvm-project//llvm:Instrumentation",
@@ -966,7 +967,6 @@ cc_library(
         ":in_process_collectives",
         "//xla:executable_run_options",
         "//xla:shape_util",
-        "//xla:statusor",
         "//xla:types",
         "//xla:util",
         "//xla:xla_data_proto_cc",
@@ -1011,15 +1011,24 @@ cc_library(
 )
 
 cc_library(
-    name = "runtime_conv2d",
-    srcs = [
-        "runtime_conv2d.cc",
-        "runtime_conv_impl.h",
+    name = "runtime_conv_impl",
+    hdrs = ["runtime_conv_impl.h"],
+    visibility = internal_visibility([":friends"]),
+    deps = [
+        "//xla/tsl/framework/contraction:eigen_contraction_kernel",
+        "//xla/tsl/framework/convolution:eigen_helpers",
+        "@eigen_archive//:eigen3",
     ],
+)
+
+cc_library(
+    name = "runtime_conv2d",
+    srcs = ["runtime_conv2d.cc"],
     hdrs = ["runtime_conv2d.h"],
     copts = runtime_copts(),
     visibility = ["//visibility:public"],
     deps = [
+        ":runtime_conv_impl",
         ":runtime_lightweight_check",
         "//xla:executable_run_options",
         "//xla/tsl/framework/contraction:eigen_contraction_kernel",
@@ -1032,14 +1041,12 @@ cc_library(
 
 cc_library(
     name = "runtime_conv3d",
-    srcs = [
-        "runtime_conv3d.cc",
-        "runtime_conv_impl.h",
-    ],
+    srcs = ["runtime_conv3d.cc"],
     hdrs = ["runtime_conv3d.h"],
     copts = runtime_copts(),
     visibility = ["//visibility:public"],
     deps = [
+        ":runtime_conv_impl",
         ":runtime_lightweight_check",
         "//xla:executable_run_options",
         "//xla/tsl/framework/contraction:eigen_contraction_kernel",
@@ -1164,14 +1171,12 @@ cc_library(
 
 cc_library(
     name = "runtime_single_threaded_conv2d",
-    srcs = [
-        "runtime_conv_impl.h",
-        "runtime_single_threaded_conv2d.cc",
-    ],
+    srcs = ["runtime_single_threaded_conv2d.cc"],
     hdrs = ["runtime_single_threaded_conv2d.h"],
     copts = runtime_copts(),
     visibility = ["//visibility:public"],
     deps = [
+        ":runtime_conv_impl",
         "//xla/tsl/framework/contraction:eigen_contraction_kernel",
         "//xla/tsl/framework/convolution:eigen_helpers",
         "@com_google_absl//absl/base:dynamic_annotations",
@@ -1182,14 +1187,12 @@ cc_library(
 
 cc_library(
     name = "runtime_single_threaded_conv3d",
-    srcs = [
-        "runtime_conv_impl.h",
-        "runtime_single_threaded_conv3d.cc",
-    ],
+    srcs = ["runtime_single_threaded_conv3d.cc"],
     hdrs = ["runtime_single_threaded_conv3d.h"],
     copts = runtime_copts(),
     visibility = ["//visibility:public"],
     deps = [
+        ":runtime_conv_impl",
         "//xla/tsl/framework/contraction:eigen_contraction_kernel",
         "//xla/tsl/framework/convolution:eigen_helpers",
         "@com_google_absl//absl/base:dynamic_annotations",
@@ -1323,6 +1326,7 @@ cc_library(
         "@com_google_absl//absl/types:span",
         "@llvm-project//mlir:AsmParser",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
         "@local_tsl//tsl/platform:logging",
         "@local_tsl//tsl/platform:statusor",
     ],
@@ -1532,7 +1536,6 @@ cc_library(
         ":ir_emission_utils",
         ":shape_partition",
         ":target_machine_features",
-        "//xla:statusor",
         "//xla:util",
         "//xla/hlo/ir:hlo",
         "//xla/service:hlo_cost_analysis",
@@ -1542,6 +1545,7 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@local_tsl//tsl/platform:logging",
         "@local_tsl//tsl/platform:platform_port",
@@ -1669,7 +1673,6 @@ cc_library(
         "//xla:literal",
         "//xla:shape_util",
         "//xla:status_macros",
-        "//xla:statusor",
         "//xla:types",
         "//xla:util",
         "//xla:xla_data_proto_cc",
@@ -1679,6 +1682,7 @@ cc_library(
         "//xla/service/llvm_ir:llvm_util",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/base:dynamic_annotations",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:span",
         "@llvm-project//llvm:Core",
         "@llvm-project//llvm:TargetParser",
