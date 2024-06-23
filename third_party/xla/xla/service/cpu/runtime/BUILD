@@ -64,6 +64,18 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "thunk_testlib",
+    testonly = 1,
+    hdrs = ["thunk_testlib.h"],
+    deps = [
+        ":thunk",
+        "//xla/runtime:buffer_use",
+        "//xla/tsl/concurrency:async_value",
+        "@com_google_absl//absl/status",
+    ],
+)
+
 xla_cc_test(
     name = "thunk_test",
     srcs = ["thunk_test.cc"],
@@ -176,6 +188,7 @@ xla_cc_test(
         ":buffer_allocations",
         ":conditional_thunk",
         ":thunk",
+        ":thunk_testlib",
         "//xla:shape_util",
         "//xla/runtime:buffer_use",
         "//xla/service:buffer_assignment",
@@ -603,6 +616,27 @@ cc_library(
     ],
 )
 
+xla_cc_test(
+    name = "replica_id_thunk_test",
+    srcs = ["replica_id_thunk_test.cc"],
+    deps = [
+        ":buffer_allocations",
+        ":replica_id_thunk",
+        ":thunk",
+        "//xla:executable_run_options",
+        "//xla:shape_util",
+        "//xla/service:buffer_assignment",
+        "//xla/service:executable",
+        "//xla/service:maybe_owning_device_memory",
+        "//xla/stream_executor",
+        "//xla/tsl/concurrency:async_value",
+        "@local_tsl//tsl/lib/core:status_test_util",
+        "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/platform:test",
+        "@local_tsl//tsl/platform:test_main",
+    ],
+)
+
 cc_library(
     name = "infeed_thunk",
     srcs = ["infeed_thunk.cc"],
@@ -721,6 +755,28 @@ cc_library(
         "@local_tsl//tsl/platform:logging",
         "@local_tsl//tsl/platform:statusor",
         "@local_tsl//tsl/profiler/lib:traceme",
+    ],
+)
+
+xla_cc_test(
+    name = "while_thunk_test",
+    srcs = ["while_thunk_test.cc"],
+    deps = [
+        ":buffer_allocations",
+        ":thunk",
+        ":thunk_testlib",
+        ":while_thunk",
+        "//xla:shape_util",
+        "//xla/runtime:buffer_use",
+        "//xla/service:buffer_assignment",
+        "//xla/service:maybe_owning_device_memory",
+        "//xla/stream_executor",
+        "//xla/tsl/concurrency:async_value",
+        "@com_google_absl//absl/status",
+        "@local_tsl//tsl/lib/core:status_test_util",
+        "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/platform:test",
+        "@local_tsl//tsl/platform:test_main",
     ],
 )
 

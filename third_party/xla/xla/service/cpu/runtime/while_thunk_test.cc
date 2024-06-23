@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "xla/service/cpu/runtime/conditional_thunk.h"
+#include "xla/service/cpu/runtime/while_thunk.h"
 
 #include <cstdint>
 #include <memory>
@@ -30,22 +30,29 @@ limitations under the License.
 namespace xla::cpu {
 namespace {
 
-TEST(ConditionalThunkTest, BufferUses) {
+TEST(WhileThunkTest, BufferUses) {
   BufferAllocation alloc(0, 1024, 0);
-  BufferAllocation::Slice branch_index_slice(&alloc, 0, sizeof(int32_t));
-  BufferAllocation::Slice read_slice(&alloc, 10, 10);
+  BufferAllocation::Slice predicate_slice(&alloc, 0, sizeof(int32_t));
+  BufferAllocation::Slice cond_read_slice(&alloc, 10, 10);
+  BufferAllocation::Slice body_read_slice(&alloc, 20, 10);
 
-  std::vector<ThunkSequence> branch_sequences(1);
-  branch_sequences[0].push_back(
-      std::make_unique<BufferUseThunk>(BufferUse::Read(read_slice)));
+  ThunkSequence cond_sequence;
+  cond_sequence.push_back(
+      std::make_unique<BufferUseThunk>(BufferUse::Read(cond_read_slice)));
+
+  ThunkSequence body_sequence;
+  body_sequence.push_back(
+      std::make_unique<BufferUseThunk>(BufferUse::Read(body_read_slice)));
 
   TF_ASSERT_OK_AND_ASSIGN(
-      auto thunk, ConditionalThunk::Create({"conditional"}, branch_index_slice,
-                                           std::move(branch_sequences)));
+      auto thunk,
+      WhileThunk::Create({"while"}, predicate_slice, std::move(cond_sequence),
+                         std::move(body_sequence)));
 
-  EXPECT_EQ(thunk->buffer_uses().size(), 2);
-  EXPECT_EQ(thunk->buffer_uses()[0], BufferUse::Read(branch_index_slice));
-  EXPECT_EQ(thunk->buffer_uses()[1], BufferUse::Read(read_slice));
+  EXPECT_EQ(thunk->buffer_uses().size(), 3);
+  EXPECT_EQ(thunk->buffer_uses()[0], BufferUse::Write(predicate_slice));
+  EXPECT_EQ(thunk->buffer_uses()[1], BufferUse::Read(cond_read_slice));
+  EXPECT_EQ(thunk->buffer_uses()[2], BufferUse::Read(body_read_slice));
 }
 
 }  // namespace
