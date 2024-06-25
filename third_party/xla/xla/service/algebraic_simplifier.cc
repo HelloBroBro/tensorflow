@@ -94,6 +94,19 @@ bool IsAll(const HloInstruction* op, int8_t value) {
   }
 }
 
+// Unwraps broadcasts hunting for a constant.  If we find one, checks if the
+// constant contains only the given value.
+bool IsAllFloat(const HloInstruction* op, float value) {
+  switch (op->opcode()) {
+    case HloOpcode::kBroadcast:
+      return IsAllFloat(op->operand(0), value);
+    case HloOpcode::kConstant:
+      return op->literal().IsAllFloat(value);
+    default:
+      return false;
+  }
+}
+
 bool IsAll(const HloInstruction* op, const Literal& scalar) {
   CHECK(ShapeUtil::IsScalar(scalar.shape()));
   switch (op->opcode()) {
@@ -4569,6 +4582,13 @@ absl::Status AlgebraicSimplifierVisitor::HandleMultiply(
         HloInstruction::CreateUnary(multiply->shape(), HloOpcode::kExp, add));
   }
 
+  VLOG(10) << "trying transform [sqrt(x) * sqrt(x) => x], for x >= 0 "
+           << multiply->ToString();
+  if (Match(multiply, m::Multiply(m::Sqrt(m::Op(&a)), m::Sqrt(m::Op(&a)))) &&
+      IsNonNegative(a, options_)) {
+    return ReplaceInstruction(multiply, a);
+  }
+
   VLOG(10) << "trying transform [rsqrt(B) * rsqrt(B) => 1/B], for B >= 0 "
            << multiply->ToString();
   HloInstruction* b;
@@ -5447,6 +5467,14 @@ absl::Status AlgebraicSimplifierVisitor::HandlePower(HloInstruction* power) {
     return ReplaceWithNewInstruction(
         power, HloInstruction::CreateBinary(power->shape(), HloOpcode::kDivide,
                                             MakeScalarLike(lhs, 1), lhs));
+  }
+
+  VLOG(10) << "trying transform [pow(A, 0.5) => sqrt(A)], for A >= 0: "
+           << power->ToString();
+  if (IsAllFloat(rhs, 0.5) && IsNonNegative(lhs, options_)) {
+    return ReplaceWithNewInstruction(
+        power,
+        HloInstruction::CreateUnary(power->shape(), HloOpcode::kSqrt, lhs));
   }
 
   return absl::OkStatus();
@@ -9146,7 +9174,7 @@ absl::Status AlgebraicSimplifierVisitor::HandleConvolution(
   TF_ASSIGN_OR_RETURN(bool can_rewrite_bf16_conv_to_onednn,
                       IsOneDnnRewritableBF16Conv(&convolution));
   if (can_rewrite_bf16_conv_to_onednn) {
-    return OkStatus();
+    return absl::OkStatus();
   }
 #endif  // INTEL_MKL && ENABLE_ONEDNN_V3
   // Try to replace the convolution with a kDot or a kMultiply instruction.

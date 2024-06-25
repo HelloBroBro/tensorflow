@@ -735,6 +735,7 @@ xla_test(
         "large",
         "no_oss",  # requires-mem:16g tag doesn't work in open source
         "nomac",
+        "nozapfhahn",  # Times out under coverage
         "requires-mem:16g",
     ],
     deps = [
@@ -1210,7 +1211,6 @@ cc_library(
         "//xla:literal",
         "//xla:literal_util",
         "//xla:shape_util",
-        "//xla:status",
         "//xla:status_macros",
         "//xla:types",
         "//xla:util",
@@ -2142,7 +2142,6 @@ cc_library(
         ":cublas_cudnn",
         "//xla:permutation_util",
         "//xla:shape_util",
-        "//xla:status",
         "//xla:util",
         "//xla:window_util",
         "//xla:xla_data_proto_cc",
@@ -2151,6 +2150,7 @@ cc_library(
         "//xla/stream_executor:device_description",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
@@ -6101,8 +6101,6 @@ cc_library(
     deps = [
         ":backend_configs_cc",
         "//xla:literal_util",
-        "//xla:status",
-        "//xla:statusor",
         "//xla:util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
