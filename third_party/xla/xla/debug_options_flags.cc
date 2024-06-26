@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "xla/debug_options_flags.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -26,6 +27,8 @@ limitations under the License.
 #include "absl/base/call_once.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
+#include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
@@ -149,6 +152,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_enable_nccl_comm_splitting(false);
   opts.set_xla_gpu_enable_nccl_per_stream_comms(false);
 
+  opts.set_xla_gpu_temp_buffer_use_separate_color(false);
+
   // Set 4GB space limit for redzone scratch allocator.
   opts.set_xla_gpu_redzone_scratch_max_megabytes(1LL << 12);
   opts.set_xla_gpu_redzone_padding_bytes(8 * 1024 * 1024);
@@ -166,6 +171,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_enable_pipelined_all_gather(false);
   opts.set_xla_gpu_enable_pipelined_reduce_scatter(false);
   opts.set_xla_gpu_enable_pipelined_p2p(false);
+
+  opts.set_xla_gpu_run_post_layout_collective_pipeliner(true);
 
   opts.set_xla_gpu_collective_permute_decomposer_threshold(
       std::numeric_limits<int64_t>::max());
@@ -1282,6 +1289,14 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       "allocator config must also be set to a non-zero value that is large "
       "enough to meet peak collective memory usage."));
   flag_list->push_back(tsl::Flag(
+      "xla_gpu_temp_buffer_use_separate_color",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_temp_buffer_use_separate_color),
+      debug_options->xla_gpu_temp_buffer_use_separate_color(),
+      "Enables temp User Buffer Registration. Enable this flag will use a "
+      "separate cuda async memory allocator to allocate temp buffer, this will "
+      "allocate temp buffer to the fixed address on every iteration"));
+  flag_list->push_back(tsl::Flag(
       "xla_gpu_enable_nccl_comm_splitting",
       bool_setter_for(&DebugOptions::set_xla_gpu_enable_nccl_comm_splitting),
       debug_options->xla_gpu_enable_nccl_comm_splitting(),
@@ -1422,6 +1437,12 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
       bool_setter_for(&DebugOptions::set_xla_gpu_enable_pipelined_p2p),
       debug_options->xla_gpu_enable_pipelined_p2p(),
       "Enable pipelinling of P2P instructions."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_run_post_layout_collective_pipeliner",
+      bool_setter_for(
+          &DebugOptions::set_xla_gpu_run_post_layout_collective_pipeliner),
+      debug_options->xla_gpu_run_post_layout_collective_pipeliner(),
+      "Move collective pipeliner after the post-layout optimization."));
   flag_list->push_back(tsl::Flag(
       "xla_gpu_collective_permute_decomposer_threshold",
       int64_setter_for(

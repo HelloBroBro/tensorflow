@@ -4584,20 +4584,21 @@ absl::Status AlgebraicSimplifierVisitor::HandleMultiply(
 
   VLOG(10) << "trying transform [sqrt(x) * sqrt(x) => x], for x >= 0 "
            << multiply->ToString();
-  if (Match(multiply, m::Multiply(m::Sqrt(m::Op(&a)), m::Sqrt(m::Op(&a)))) &&
-      IsNonNegative(a, options_)) {
-    return ReplaceInstruction(multiply, a);
+  if (Match(multiply,
+            m::Multiply(m::Sqrt(m::Op(&lhs)), m::Sqrt(m::Op(&rhs)))) &&
+      lhs == rhs && IsNonNegative(lhs, options_)) {
+    return ReplaceInstruction(multiply, lhs);
   }
 
-  VLOG(10) << "trying transform [rsqrt(B) * rsqrt(B) => 1/B], for B >= 0 "
+  VLOG(10) << "trying transform [rsqrt(x) * rsqrt(x) => 1/x], for x >= 0 "
            << multiply->ToString();
-  HloInstruction* b;
-  if (Match(multiply, m::Multiply(m::Rsqrt(m::Op(&b)), m::Rsqrt(m::Op(&b)))) &&
-      IsNonNegative(b, options_)) {
+  if (Match(multiply,
+            m::Multiply(m::Rsqrt(m::Op(&lhs)), m::Rsqrt(m::Op(&rhs)))) &&
+      lhs == rhs && IsNonNegative(lhs, options_)) {
     return ReplaceWithNewInstruction(
         multiply,
         HloInstruction::CreateBinary(multiply->shape(), HloOpcode::kDivide,
-                                     MakeScalarLike(b, 1), b));
+                                     MakeScalarLike(lhs, 1), lhs));
   }
 
   return absl::OkStatus();
@@ -6596,6 +6597,88 @@ absl::Status AlgebraicSimplifierVisitor::HandleSlice(HloInstruction* slice) {
     }
   }
 
+  if (HloInstruction * reduce_window;
+      options_.enable_window_reduce_to_reduce_replacement() &&
+      hlo_instruction_utils::IsUnstridedSlice(slice) &&
+      Match(slice, m::Slice(m::ReduceWindow(&reduce_window).WithOneUse()))) {
+    // A reduce_window with window pad + slice[:,-1] can be expressed as
+    // reduce + reshape if all dimensions either have a window size of one or
+    // the entire dimension. No stride or dilation are expected. reduce_window
+    // pad should be present to make output shape equal to input shape.
+    // slice_limit[dim] should be equal to reduce_window shape[dim].
+    // slice_limit[dim] - slice_start[dim] should be equal to 1 for reduced dim
+    //
+    // The reshape is a bitcast since it adds one-sized dimensions. Often
+    // these ones are immediately removed as well with another reshape. The
+    // implementation of reduce tends to be slightly more efficient at
+    // reducing entire dimensions compared to reduce window.
+    //
+    //// Example 1:
+    // r = s32[2,8] reduce-window(s32[2,8] p, c), window={size=1x8 pad=0_0x7_0}
+    // s = s32[2,1] slice(r), slice={[0:2], [7:8]}
+    //// Can be folded to:
+    // r = s32[2] reduce(s32[2,8] p, c), dimensions={1},
+    // s = s32[2] reshape(r)
+    //
+    //// Example 2:
+    // p = s32[3,4,2]
+    // r = s32[3,4,2] reduce-window(p, c), window={size=1x4x2 pad=0_0x3_0x1_0}
+    // s = s32[3,1,1] slice(r), slice={[0:3], [3:4], [1:2]}
+    //// Can be folded to:
+    // r = s32[3] reduce(p, c), dimensions={1,2},
+    // s = s32[3,1,1] reshape(r)
+    auto effective_reduce_dims = [&] {
+      auto& window = reduce_window->window();
+      // reduce_window should have padding, but no Strides and Dilation
+      if (window_util::HasStride(window) || window_util::HasDilation(window) ||
+          !window_util::HasPadding(window)) {
+        return DimensionVector{};
+      }
+      auto rank = reduce_window->shape().dimensions_size();
+      auto& slice_starts = slice->slice_starts();
+      auto& slice_limits = slice->slice_limits();
+      DimensionVector reduce_dims;
+      for (auto i = 0; i < rank; ++i) {
+        auto window_dim_size = window.dimensions(i).size();
+        auto reduce_window_dim_size = reduce_window->shape().dimensions(i);
+        auto slice_dim_size = slice->shape().dimensions(i);
+        if (reduce_window_dim_size != slice_limits[i] ||
+            window.dimensions(i).padding_low() != slice_starts[i] ||
+            window.dimensions(i).padding_high() != 0) {
+          return DimensionVector{};
+        }
+        if (window_dim_size == 1 && reduce_window_dim_size == slice_dim_size &&
+            slice_starts[i] == 0) {
+          continue;
+        }
+        if (slice_dim_size == 1 && reduce_window_dim_size == window_dim_size &&
+            slice_limits[i] - slice_starts[i] == 1) {
+          reduce_dims.push_back(i);
+        } else {
+          return DimensionVector{};
+        }
+      }
+      return reduce_dims;
+    }();
+
+    // If a reduce window can be expressed as a reduce, do so and reshape the
+    // output.
+    if (!effective_reduce_dims.empty()) {
+      Shape reduce_shape = ShapeUtil::DeleteDimensions(effective_reduce_dims,
+                                                       reduce_window->shape());
+      simplifier_->UpdateLayout(&reduce_shape);
+      HloInstruction* reduce =
+          slice->AddInstruction(HloInstruction::CreateReduce(
+              /*shape=*/reduce_shape,
+              /*operand=*/reduce_window->mutable_operand(0),
+              /*init_value=*/reduce_window->mutable_operand(1),
+              /*dimensions_to_reduce=*/effective_reduce_dims,
+              /*reduce_computation=*/reduce_window->to_apply()));
+      return ReplaceWithNewInstruction(
+          slice, HloInstruction::CreateReshape(slice->shape(), reduce));
+    }
+  }
+
   // Do not try to reorder slices and reshapes after layout assignment as it may
   // be invalid.
   if (!options_.is_layout_sensitive()) {
@@ -8104,6 +8187,33 @@ absl::Status AlgebraicSimplifierVisitor::HandleSelect(HloInstruction* select) {
           select, HloInstruction::CreateUnary(
                       select->mutable_operand(0)->shape(), HloOpcode::kNot,
                       select->mutable_operand(0)));
+    }
+    // select(compare(a, b, GT/GE), a, b) => or(a, b)
+    // select(compare(a, b, LT/LE), a, b) => and(a, b)
+    // select(compare(a, b, EQ), a, b) => b
+    // select(compare(a, b, NE), a, b) => a
+    HloInstruction *compare, *lhs, *rhs;
+    if (Match(select, m::Select(m::Op(&compare), m::Op(&lhs), m::Op(&rhs))) &&
+        Match(compare, m::Compare(m::Op().Is(lhs), m::Op().Is(rhs)))) {
+      auto cmp_dir = compare->comparison_direction();
+      if (cmp_dir == ComparisonDirection::kGt ||
+          cmp_dir == ComparisonDirection::kGe) {
+        return ReplaceWithNewInstruction(
+            select, HloInstruction::CreateBinary(select->shape(),
+                                                 HloOpcode::kOr, lhs, rhs));
+      }
+      if (cmp_dir == ComparisonDirection::kLt ||
+          cmp_dir == ComparisonDirection::kLe) {
+        return ReplaceWithNewInstruction(
+            select, HloInstruction::CreateBinary(select->shape(),
+                                                 HloOpcode::kAnd, lhs, rhs));
+      }
+      if (cmp_dir == ComparisonDirection::kEq) {
+        return ReplaceInstruction(select, rhs);
+      }
+      if (cmp_dir == ComparisonDirection::kNe) {
+        return ReplaceInstruction(select, lhs);
+      }
     }
   }
 

@@ -17,18 +17,33 @@ package_group(
 
 cc_library(
     name = "buffer_allocations",
-    srcs = ["buffer_allocations.cc"],
     hdrs = ["buffer_allocations.h"],
     deps = [
+        "//xla:util",
         "//xla/service:buffer_assignment",
         "//xla/service:maybe_owning_device_memory",
         "//xla/stream_executor",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
         "@local_tsl//tsl/platform:statusor",
+    ],
+)
+
+xla_cc_test(
+    name = "buffer_allocations_test",
+    srcs = ["buffer_allocations_test.cc"],
+    deps = [
+        ":buffer_allocations",
+        "//xla/service:buffer_assignment",
+        "//xla/service:maybe_owning_device_memory",
+        "//xla/stream_executor:device_memory",
+        "@com_google_absl//absl/status",
+        "@local_tsl//tsl/lib/core:status_test_util",
+        "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/platform:test",
+        "@local_tsl//tsl/platform:test_main",
     ],
 )
 
@@ -615,23 +630,21 @@ xla_cc_test(
 )
 
 cc_library(
-    name = "replica_id_thunk",
-    srcs = ["replica_id_thunk.cc"],
-    hdrs = ["replica_id_thunk.h"],
+    name = "logical_id_thunk",
+    srcs = ["logical_id_thunk.cc"],
+    hdrs = ["logical_id_thunk.h"],
     deps = [
         ":thunk",
         "//xla:status_macros",
-        "//xla:util",
         "//xla/runtime:buffer_use",
         "//xla/service:buffer_assignment",
-        "//xla/service/cpu:cpu_runtime",
+        "//xla/service:computation_placer_hdr",
+        "//xla/service:global_device_id",
         "//xla/stream_executor",
         "//xla/tsl/concurrency:async_value",
         "@com_google_absl//absl/memory",
-        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
-        "@com_google_absl//absl/types:span",
         "@local_tsl//tsl/platform:logging",
         "@local_tsl//tsl/platform:statusor",
         "@local_tsl//tsl/profiler/lib:traceme",
@@ -639,20 +652,19 @@ cc_library(
 )
 
 xla_cc_test(
-    name = "replica_id_thunk_test",
-    srcs = ["replica_id_thunk_test.cc"],
+    name = "logical_id_thunk_test",
+    srcs = ["logical_id_thunk_test.cc"],
     deps = [
         ":buffer_allocations",
-        ":replica_id_thunk",
+        ":logical_id_thunk",
         ":thunk",
         "//xla:executable_run_options",
-        "//xla:shape_util",
         "//xla/service:buffer_assignment",
-        "//xla/service:executable",
         "//xla/service:maybe_owning_device_memory",
         "//xla/stream_executor",
         "//xla/tsl/concurrency:async_value",
-        "@local_tsl//tsl/lib/core:status_test_util",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@local_tsl//tsl/platform:statusor",
         "@local_tsl//tsl/platform:test",
         "@local_tsl//tsl/platform:test_main",
@@ -720,8 +732,10 @@ cc_library(
         "//xla/stream_executor/host:host_kernel",
         "//xla/stream_executor/host:host_kernel_c_api",
         "//xla/tsl/concurrency:async_value",
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/numeric:bits",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
@@ -749,6 +763,7 @@ xla_cc_test(
         "//xla/stream_executor/host:host_kernel_c_api",
         "//xla/tsl/concurrency:async_value",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@local_tsl//tsl/lib/core:status_test_util",
         "@local_tsl//tsl/platform:statusor",
         "@local_tsl//tsl/platform:test",
