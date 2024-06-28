@@ -3152,6 +3152,7 @@ cc_library(
         "//xla/hlo/ir:hlo",
         "//xla/service:float_support",
         "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/log:check",
     ],
 )
@@ -3432,6 +3433,7 @@ cc_library(
         ":compile_module_to_llvm_ir",
         ":conv_layout_normalization",
         ":copy_fusion",
+        ":collective_permute_valid_iteration_annotator",
         ":custom_kernel_fusion_rewriter",
         ":dot_dimension_sorter",
         ":dot_operand_converter",
@@ -5189,6 +5191,24 @@ xla_test(
         "//xla/service/gpu/tests:gpu_codegen_test",
         "//xla/stream_executor:device_description",
         "//xla/tests:xla_internal_test_main",
+    ],
+)
+
+xla_cc_test(
+    name = "gpu_float_support_test",
+    srcs = ["gpu_float_support_test.cc"],
+    deps = [
+        ":gpu_float_support",
+        "//xla:shape_util",
+        "//xla:test_helpers",
+        "//xla:xla_data_proto_cc",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:float_normalization",
+        "//xla/service:hlo_verifier",
+        "//xla/stream_executor:device_description",
+        "//xla/tests:hlo_test_base",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
