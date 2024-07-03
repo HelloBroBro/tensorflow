@@ -1285,7 +1285,7 @@ xla_cc_test(
         "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest_main",
         "@local_tsl//tsl/platform:protobuf",
-        "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/platform:status_matchers",
     ],
 )
 
@@ -5916,6 +5916,7 @@ cc_library(
         "//xla:util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
+        "//xla/hlo/ir:hlo_instruction_utils",
         "//xla/hlo/utils:hlo_query",
         "//xla/service:collective_ops_utils",
         "//xla/service:flatten_call_graph",
@@ -6319,8 +6320,8 @@ cc_library(
     ],
 )
 
-cc_test(
+xla_cc_test(
     name = "gpu_latency_hiding_scheduler_test",
     srcs = ["gpu_latency_hiding_scheduler_test.cc"],
-    deps = ["@com_google_googletest//:gtest_main"],
+    deps = ["//xla/tests:xla_internal_test_main"],
 )

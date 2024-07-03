@@ -1,4 +1,4 @@
-/* Copyright 2016 Google Inc. All Rights Reserved.
+/* Copyright 2024 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,21 +13,23 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "tensorflow/cc/ops/parsing_ops.h"
-#include "tensorflow/core/framework/types.pb.h"
-#include "tensorflow/core/kernels/fuzzing/fuzz_session.h"
+#include "tensorflow/compiler/mlir/tf2xla/api/v2/testing/utils.h"
+
+#include <string>
+
+#include "tensorflow/core/platform/resource_loader.h"
 
 namespace tensorflow {
-namespace fuzzing {
+namespace tf2xla {
+namespace v2 {
+namespace testing {
 
-class FuzzStringToNumber : public FuzzStringInputOp {
-  SINGLE_INPUT_OP_BUILDER(DT_STRING, StringToNumber);
-};
+std::string TestDataPath() {
+  return tensorflow::GetDataDependencyFilepath(
+      "tensorflow/compiler/mlir/tf2xla/api/v2/testdata/");
+}
 
-// TODO(dga):  Generalize this to hit both the float and int
-// variants of StringToNumber - requires an update to the
-// plumbing code to specify the output dtype.
-STANDARD_TF_FUZZ_FUNCTION(FuzzStringToNumber);
-
-}  // end namespace fuzzing
-}  // end namespace tensorflow
+}  // namespace testing
+}  // namespace v2
+}  // namespace tf2xla
+}  // namespace tensorflow
