@@ -86,12 +86,7 @@ class CudnnFusedMhaRewriterTestHloTest : public HloTestBase {
   CudnnFusedMhaRewriterTestHloTest()
       : HloTestBase(/*verifier_layout_sensitive=*/false,
                     /*allow_mixed_precision_in_hlo_verifier=*/false,
-                    /*instruction_can_change_layout_func=*/{}) {
-#if !defined(GOOGLE_CUDA) || CUDA_VERSION < 12000
-    skip_reason_ = "cuDNN fused MHA requires CUDA 12 or later.";
-    return;
-#endif
-  }
+                    /*instruction_can_change_layout_func=*/{}) {}
 
  protected:
   size_t CountFusedAttentionCall(HloModule* module, bool is_backward = false) {
@@ -126,27 +121,6 @@ class CudnnFusedMhaRewriterTestHloTest : public HloTestBase {
   // correct we'd have to ensure that all the parents' SetUp() methods are
   // called, which is error prone.
   std::optional<absl::string_view> skip_reason_;
-};
-
-class CudnnFusedMhaRewriterPipelineTest
-    : public CudnnFusedMhaRewriterTestHloTest {
- public:
-  CudnnFusedMhaRewriterPipelineTest() {
-    if (skip_reason_) return;  // the parent might have set it.
-#if !defined(GOOGLE_CUDA) || CUDNN_VERSION < 8800  // NOLINT
-    skip_reason_ = "Pipeline test requires cuDNN 8.8.0 or later.";
-    return;
-#endif
-    stream_executor::CudaComputeCapability cc = GetRealCudaComputeCapability();
-    // Enforce capability minor == 0 because hardware with a non-zero minor
-    // number typically has insufficient shared memory for cuDNN FMHA.
-    if (!cc.IsAtLeastAmpere() || cc.minor != 0) {
-      skip_reason_ =
-          "Pipeline test requires Nvidia AMPERE+ GPUs with minor "
-          "compute capability == 0.";
-      return;
-    }
-  }
 };
 
 constexpr absl::string_view
