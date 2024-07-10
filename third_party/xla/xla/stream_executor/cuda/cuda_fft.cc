@@ -258,17 +258,6 @@ absl::Status CUDAFftPlan::Initialize(
   return absl::OkStatus();
 }
 
-absl::Status CUDAFftPlan::Initialize(GpuExecutor *parent, Stream *stream,
-                                     int rank, uint64_t *elem_count,
-                                     fft::Type type,
-                                     ScratchAllocator *scratch_allocator) {
-  return Initialize(parent_, stream, rank, elem_count,
-                    /*input_embed=*/nullptr, /*input_stride=*/0,
-                    /*input_distance=*/0,
-                    /*output_embed=*/nullptr, /*output_stride=*/0,
-                    /*output_distance=*/0, type, 1, scratch_allocator);
-}
-
 absl::Status CUDAFftPlan::UpdateScratchAllocator(
     Stream *stream, ScratchAllocator *scratch_allocator) {
   scratch_allocator_ = scratch_allocator;
@@ -372,6 +361,7 @@ bool CUDAFft::DoFftInternal(Stream *stream, fft::Plan *plan, FuncT cufftExec,
     return false;
   }
 
+#if CUDA_VERSION >= 10010
   // Workaround a cuFFT bug, which mutates the input buffer when it shouldn't.
   // See b/155276727 and go/nvbugs/2959622.
   // TODO(b/155276727): refine the bounding condition.
@@ -394,6 +384,7 @@ bool CUDAFft::DoFftInternal(Stream *stream, fft::Plan *plan, FuncT cufftExec,
       // execution just because the allocation for the incorrect case fails.
     }
   }
+#endif
 
   cuda::ScopedActivateExecutorContext sac(parent_);
   auto ret =
