@@ -1,4 +1,4 @@
-/* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
+/* Copyright 2024 The OpenXLA Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -12,20 +12,20 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-#include "tensorflow/lite/kernels/shim/test_op/simple_tf_op.h"
 
-#include "tensorflow/core/framework/op_kernel.h"
-#include "tensorflow/core/framework/types.h"
-#include "tensorflow/lite/kernels/shim/tf_op_shim.h"
+#ifndef XLA_SERVICE_GPU_FUSIONS_MLIR_DIALECT
+#define XLA_SERVICE_GPU_FUSIONS_MLIR_DIALECT
 
-namespace tflite {
-namespace shim {
+include "mlir/IR/DialectBase.td"
 
-REGISTER_TF_OP_SHIM(SimpleOpKernel);
+def XlaGpuDialect : Dialect {
+  let name = "xla_gpu";
 
-REGISTER_KERNEL_BUILDER(
-    Name(SimpleOpKernel::OpName()).Device(::tensorflow::DEVICE_CPU),
-    SimpleOpKernel);
+  let description = [{
+    This dialect contains ops required for lowering HLO to LLVM.
+  }];
 
-}  // namespace shim
-}  // namespace tflite
+  let cppNamespace = "::xla::gpu";
+}
+
+#endif // MLIR_HLO_DIALECT_MHLO_IR_HLO_DIALECT

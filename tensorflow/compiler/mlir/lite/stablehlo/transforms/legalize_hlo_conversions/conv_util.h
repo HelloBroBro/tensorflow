@@ -16,6 +16,7 @@ limitations under the License.
 #define TENSORFLOW_COMPILER_MLIR_LITE_STABLEHLO_TRANSFORMS_LEGALIZE_HLO_CONVERSIONS_CONV_UTIL_H_
 
 #include "llvm/ADT/ArrayRef.h"
+#include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/Types.h"  // from @llvm-project
 #include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "xla/mlir_hlo/mhlo/IR/hlo_ops.h"
@@ -75,6 +76,11 @@ class Layout {
   // "this" and given layout have the same rank.
   llvm::SmallVector<int64_t, 4> GetPermForReLayout(
       const Layout& to_layout) const;
+
+  // Permutes given shape based on the permutaion implied to take this Layout to
+  // the given one.
+  llvm::SmallVector<int64_t, 4> PermuteShape(const Layout& to_layout,
+                                             ArrayRef<int64_t> shape) const;
 
   bool operator==(const Layout& other) const {
     return SpecialDim1() == other.SpecialDim1() &&
@@ -165,9 +171,26 @@ class ConvData {
   mlir::Type element_type_;
 };
 
-// TFL Native Standard Conv Layouts:
-// 2D : [b, 0, 1, f]x[o, 0, 1, i]->[b, 0, 1, f]
-// 3D : [b, 0, 1, 2, f]x[0, 1, 2, i, o]->[b, 0, 1, 2, f]
+inline bool IsStandardFeatureGroup(const ConvData& data) {
+  const int64_t input_features =
+      data.InputLayout().SpecialDim2(data.InputShape());
+  const int64_t kernel_in_features =
+      data.KernelLayout().SpecialDim1(data.KernelShape());
+  const int64_t feature_groups = data.FeatureGroupCount();
+  const bool trivial_feature_groups = feature_groups == 1;
+  // Non-trivial feature_groups and feature_groups == input_features
+  // codes for depthwise conv.
+  const bool feature_groups_not_input_features =
+      feature_groups != input_features;
+  const bool features_divide =
+      (input_features / feature_groups) == kernel_in_features;
+  return trivial_feature_groups ||
+         (feature_groups_not_input_features && features_divide);
+}
+
+inline bool IsStandardFeatureGroup(mhlo::ConvolutionOp op) {
+  return IsStandardFeatureGroup(ConvData(op));
+}
 
 // Does this convolution map to a standard conv_2d or conv_3d
 // (not depthwise or tranpose conv).
@@ -175,9 +198,7 @@ inline bool IsStandardConv(mhlo::ConvolutionOp op) {
   const ConvData data(op);
   const bool trivial_lhs_dilate =
       llvm::all_of(data.InputDilations(), [](auto d) { return d == 1; });
-  return trivial_lhs_dilate &&
-         data.InputLayout().SpecialDim2(data.InputShape()) !=
-             data.FeatureGroupCount();
+  return trivial_lhs_dilate && IsStandardFeatureGroup(data);
 }
 
 inline int64_t DnumRank(mhlo::ConvDimensionNumbersAttr dnums) {

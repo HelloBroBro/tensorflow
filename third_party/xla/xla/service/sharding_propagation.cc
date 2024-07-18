@@ -1593,12 +1593,7 @@ absl::StatusOr<bool> ProcessShardingInstruction(
         if (!unspec_dims.empty()) {
           absl::c_sort(unspec_dims);
           unspecified_dims->emplace(instruction, std::move(unspec_dims));
-        } else if (!instruction->operand(0)->has_sharding() &&
-                   instruction->operand(0)->user_count() == 1) {
-          // If instruction->operand(0) has sharding, we cannot overwrite it. If
-          // instruction->operand(0) has more than one user, we cannot overwrite
-          // it since other users can also propagate shardings to
-          // instruction->operand(0).
+        } else if (!instruction->operand(0)->has_sharding()) {
           instruction->mutable_operand(0)->set_sharding(
               instruction->sharding());
         }
@@ -3371,7 +3366,8 @@ absl::StatusOr<bool> ShardingPropagation::Run(
         /*ignore_control_dependencies=*/false,
         /*only_scalars=*/false,
         /*is_sharding_sensitive=*/true,
-        /*allow_compatible_sharding=*/false);
+        /*allow_compatible_sharding=*/true,
+        /*instructions_to_skip=*/provided_shardings);
     TF_RETURN_IF_ERROR(pass.Run(module, execution_threads).status());
 
     // CSE may invalidate stored HloInstruction pointers, so we need to remove
