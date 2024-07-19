@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "xla/service/gpu/ir_emitter_triton.h"
+#include "xla/service/gpu/fusions/triton/triton_fusion_emitter.h"
 
 #include <array>
 #include <climits>
@@ -661,6 +661,14 @@ absl::StatusOr<Value> EmitScope(
     absl::Span<const HloInstruction* const> instructions,
     absl::flat_hash_map<const HloInstruction*, Value>& values);
 
+// Adds `n` leading `1` dimensions to the input tensor.
+Value LeftExpandDimNTimes(ImplicitLocOpBuilder& b, Value input, int64_t n) {
+  for (int i = 0; i < n; ++i) {
+    input = b.create<mt::ExpandDimsOp>(input, /*axis=*/0);
+  }
+  return input;
+}
+
 absl::StatusOr<Value> EmitReduce(
     ImplicitLocOpBuilder& b, const TiledHloInstruction& tiled_hlo_reduce,
     absl::flat_hash_map<const TiledHloInstruction*, Value>& values,
@@ -683,6 +691,7 @@ absl::StatusOr<Value> EmitReduce(
   llvm::ArrayRef<int64_t> input_shape =
       mlir::cast<ShapedType>(values[tiled_hlo_reduce.operand(0)].getType())
           .getShape();
+  int64_t input_rank = input_shape.size();
 
   // Since every shape is padded to a power of 2 in Triton, the input tile may
   // be padded with arbitrary values. These values could affect the result of
@@ -697,15 +706,16 @@ absl::StatusOr<Value> EmitReduce(
         ma::CmpIPredicate::slt, Range(b, block_row),
         Splat(b, CreateConst(b, b.getI32Type(), row_len), block_row));
 
-    // Make the mask match the rank of the input.
-    for (int dim = 0; dim < input_shape.size() - 1; ++dim) {
-      mask = b.create<mt::ExpandDimsOp>(mask, /*axis=*/0);
-    }
+    // Make the mask match the rank of the input---the mask starts out with
+    // rank 1.
+    mask = LeftExpandDimNTimes(b, mask, input_rank - 1);
     mask = Broadcast(b, mlir::cast<TensorValue>(mask), input_shape);
 
-    input = b.create<ma::SelectOp>(
-        mask, input,
-        Broadcast(b, mlir::cast<TensorValue>(neutral), input_shape));
+    Value broadcasted_neutral = Broadcast(
+        b, mlir::cast<TensorValue>(LeftExpandDimNTimes(b, neutral, input_rank)),
+        input_shape);
+
+    input = b.create<ma::SelectOp>(mask, input, broadcasted_neutral);
   }
 
   // Triton actually only performs reductions on float32 inputs, and we must
@@ -811,10 +821,25 @@ Value EmitTiledBroadcast(
 
   Value expanded_input = values[tiled_broadcast.operand(0)];
 
+  SmallVector<int64_t> padded_output_tile_shape;
+  padded_output_tile_shape.reserve(output_tile_shape.size());
+
+  for (int64_t tile_dim : output_tile_shape) {
+    padded_output_tile_shape.push_back(llvm::PowerOf2Ceil(tile_dim));
+  }
+
   // Returns true if `dim_id` is broadcasted.
   auto is_broadcasted_dim = [&](int64_t dim_id) {
     return !llvm::is_contained(tiled_broadcast.hlo()->dimensions(), dim_id);
   };
+
+  // Handle the 0d special case.
+  if (input_tile_shape.empty()) {
+    expanded_input =
+        LeftExpandDimNTimes(b, expanded_input, output_tile_shape.size());
+    return Broadcast(b, mlir::cast<TensorValue>(expanded_input),
+                     padded_output_tile_shape);
+  }
 
   // The loop below iterates over output dimensions and tracks matching dims in
   // input_tile_shape and expended_input value.
@@ -826,10 +851,6 @@ Value EmitTiledBroadcast(
   for (size_t output_dim_id = 0; output_dim_id < output_tile_shape.size();
        ++output_dim_id) {
     if (is_broadcasted_dim(output_dim_id)) {
-      // The dim is broadcasted in the original instruction, but tiled to 1 in
-      // this case. Nothing to broadcast.
-      if (output_tile_shape[output_dim_id] == 1) continue;
-
       // Expand dim for broadcast.
       expanded_input =
           b.create<mt::ExpandDimsOp>(expanded_input, expanded_input_dim_id);
@@ -840,25 +861,31 @@ Value EmitTiledBroadcast(
       CHECK_EQ(input_tile_shape[input_dim_id],
                output_tile_shape[output_dim_id]);
       ++input_dim_id;
-
-      // Size-1 dims are not present in the tensor type.
-      if (output_tile_shape[output_dim_id] != 1) {
-        ++expanded_input_dim_id;
-      }
-    }
-  }
-
-  SmallVector<int64_t> padded_output_tile_shape;
-  padded_output_tile_shape.reserve(output_tile_shape.size());
-
-  for (int64_t tile_dim : output_tile_shape) {
-    if (tile_dim != 1) {
-      padded_output_tile_shape.push_back(llvm::PowerOf2Ceil(tile_dim));
+      ++expanded_input_dim_id;
     }
   }
 
   return Broadcast(b, mlir::cast<TensorValue>(expanded_input),
                    padded_output_tile_shape);
+}
+
+Value EmitTiledReshape(ImplicitLocOpBuilder& b,
+                       const TiledHloInstruction& tiled_reshape_or_bitcast,
+                       Value input) {
+  SmallVector<int64_t> padded_tile_sizes = llvm::to_vector(llvm::map_range(
+      tiled_reshape_or_bitcast.tile_sizes(),
+      [](int64_t size) { return (int64_t)llvm::PowerOf2Ceil(size); }));
+
+  Type input_element_type =
+      mlir::cast<ShapedType>(input.getType()).getElementType();
+  Type output_tensor_type =
+      mlir::RankedTensorType::get(padded_tile_sizes, input_element_type);
+
+  // Conservatively prevent Triton from reordering elements within the tile.
+  // TODO(b/353637689): see if this restriction can be lifted.
+  bool allow_reorder = false;
+  return b.create<mt::ReshapeOp>(output_tensor_type, input, allow_reorder)
+      .getResult();
 }
 
 absl::StatusOr<Value> EmitTiledHloInstruction(
@@ -902,12 +929,16 @@ absl::StatusOr<Value> EmitTiledHloInstruction(
     return EmitElementwise(b, libdevice_path, device_info, *hlo, operands);
   }
 
+  if (hlo->opcode() == HloOpcode::kReshape ||
+      hlo->opcode() == HloOpcode::kBitcast) {
+    return EmitTiledReshape(b, tiled_hlo, values[tiled_hlo.operand(0)]);
+  }
+
   // All these operations are currently supported only as operations on indices
   // which are pushed to loads and stores. We don't generate any further code
   // for these operations here.
   std::vector<HloOpcode> passthrough_opcodes(
-      {HloOpcode::kBitcast, HloOpcode::kPad, HloOpcode::kReshape,
-       HloOpcode::kSlice, HloOpcode::kTranspose});
+      {HloOpcode::kPad, HloOpcode::kSlice, HloOpcode::kTranspose});
   if (absl::c_linear_search(passthrough_opcodes, hlo->opcode())) {
     return values[tiled_hlo.operand(0)];
   }
@@ -2528,8 +2559,6 @@ MakeTensorPtrOpAndBoundaryChecks CreateMakeTensorPtrOp(
 
   for (auto [size, stride] :
        llvm::zip(tiled_hlo.tile_sizes(), physical_strides)) {
-    if (size == 1) continue;
-
     int dimension_index = sizes.size();
 
     sizes.push_back(CreateConst(b, b.getI64Type(), size));
@@ -2742,6 +2771,11 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> CreateTritonModule(
 
   b.create<mt::ReturnOp>(loc);
 
+  if (mlir::failed(mlir::verify(*triton_module))) {
+    return CreateInternalError(
+        "Failed to verify Triton module for fusion:", fusion, *triton_module);
+  }
+
   mlir::PassManager pm(&mlir_context);
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
@@ -2756,10 +2790,6 @@ absl::StatusOr<mlir::OwningOpRef<mlir::ModuleOp>> CreateTritonModule(
                             llvm_ir::DumpToString(*triton_module));
   }
 
-  if (mlir::failed(mlir::verify(*triton_module))) {
-    return CreateInternalError(
-        "Failed to verify Triton module for fusion:", fusion, *triton_module);
-  }
   return std::move(triton_module);
 }
 

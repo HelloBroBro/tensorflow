@@ -96,6 +96,7 @@ limitations under the License.
 #include "xla/service/gpu/fusions/fusion_emitter.h"
 #include "xla/service/gpu/fusions/fusions.h"
 #include "xla/service/gpu/fusions/thunk_util.h"
+#include "xla/service/gpu/fusions/triton/triton_fusion_emitter.h"
 #include "xla/service/gpu/gpu_asm_opts_util.h"
 #include "xla/service/gpu/gpu_conv_runner.h"
 #include "xla/service/gpu/gpu_fused_mha_runner.h"
@@ -105,7 +106,6 @@ limitations under the License.
 #include "xla/service/gpu/ir_emitter.h"
 #include "xla/service/gpu/ir_emitter_context.h"
 #include "xla/service/gpu/ir_emitter_nested.h"
-#include "xla/service/gpu/ir_emitter_triton.h"
 #include "xla/service/gpu/kernel_arguments.h"
 #include "xla/service/gpu/kernel_reuse_cache.h"
 #include "xla/service/gpu/kernels/custom_kernel.h"
@@ -2325,8 +2325,10 @@ absl::Status IrEmitterUnnested::EmitNcclThunk(
 
   if (should_use_nccl_thunk) {
     auto thunk_info = Thunk::ThunkInfo::WithProfileAnnotation(inst);
-    // The wrapper name is used when an op is wrapped by syntactic sugar.
-    thunk_info.profile_annotation = async_start->name();
+    // The wrapper name is used when syntactic sugar is turned on.
+    if (ir_emitter_context_->debug_options().xla_syntax_sugar_async_ops()) {
+      thunk_info.profile_annotation = async_start->name();
+    }
     auto thunk = std::make_unique<NcclThunkType>(
         thunk_info, NcclApi::Default(), inst, /*buffers=*/std::move(buffers));
     GetCollectivesAsyncEvents().insert({async_start, thunk->async_events()});

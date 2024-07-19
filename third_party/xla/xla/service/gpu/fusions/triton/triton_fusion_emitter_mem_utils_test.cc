@@ -43,8 +43,8 @@ limitations under the License.
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
 #include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/service/gpu/fusions/triton/triton_fusion_emitter.h"
 #include "xla/service/gpu/hlo_traversal.h"
-#include "xla/service/gpu/ir_emitter_triton.h"
 #include "xla/service/gpu/model/symbolic_tile_analysis.h"
 #include "xla/service/gpu/model/tiled_hlo_computation.h"
 #include "xla/service/gpu/model/tiled_hlo_instruction.h"
@@ -217,41 +217,29 @@ TEST_F(TritonMakeTensorPtrTest, BlockProperties) {
   }
   {
     auto [module, ptr] = CreateTestTensorPtr({1}, {1});
-    EXPECT_TRUE(ConstOpValuesToInt(ptr.op.getShape()).empty());
-    EXPECT_TRUE(TensorShape(ptr.op).empty());
+    EXPECT_THAT(ConstOpValuesToInt(ptr.op.getShape()), ElementsAre(1));
+    EXPECT_THAT(TensorShape(ptr.op), ElementsAre(1));
     EXPECT_TRUE(ptr.boundary_checks.empty());
-    EXPECT_TRUE(ConstOpValuesToInt(ptr.op.getStrides()).empty());
-    EXPECT_TRUE(ConstOpValuesToInt(ptr.op.getOffsets()).empty());
-    EXPECT_TRUE(ptr.op.getOrder().empty());
+    EXPECT_THAT(ConstOpValuesToInt(ptr.op.getStrides()), ElementsAre(1));
+    EXPECT_THAT(ConstOpValuesToInt(ptr.op.getOffsets()), ElementsAre(0));
+    EXPECT_THAT(ptr.op.getOrder(), ElementsAre(0));
   }
   {
     auto [module, ptr] = CreateTestTensorPtr({1, 1, 1}, {1, 1, 1});
-    EXPECT_TRUE(ConstOpValuesToInt(ptr.op.getShape()).empty());
-    EXPECT_TRUE(TensorShape(ptr.op).empty());
+    EXPECT_THAT(ConstOpValuesToInt(ptr.op.getShape()), ElementsAre(1, 1, 1));
+    EXPECT_THAT(TensorShape(ptr.op), ElementsAre(1, 1, 1));
     EXPECT_TRUE(ptr.boundary_checks.empty());
-    EXPECT_TRUE(ConstOpValuesToInt(ptr.op.getStrides()).empty());
-    EXPECT_TRUE(ConstOpValuesToInt(ptr.op.getOffsets()).empty());
-    EXPECT_TRUE(ptr.op.getOrder().empty());
+    EXPECT_THAT(ConstOpValuesToInt(ptr.op.getStrides()), ElementsAre(25, 5, 1));
+    EXPECT_THAT(ConstOpValuesToInt(ptr.op.getOffsets()), ElementsAre(0, 0, 0));
+    EXPECT_THAT(ptr.op.getOrder(), ElementsAre(2, 1, 0));
   }
   {
     auto [module, ptr] = CreateTestTensorPtr({1, 3, 4}, {1, 1, 1});
-    EXPECT_THAT(ConstOpValuesToInt(ptr.op.getShape()), ElementsAre(3, 4));
-    EXPECT_THAT(TensorShape(ptr.op), ElementsAre(4, 4));
-    EXPECT_THAT(ptr.boundary_checks, ElementsAre(0));
-    EXPECT_THAT(ConstOpValuesToInt(ptr.op.getStrides()), ElementsAre(20, 1));
-    EXPECT_THAT(ConstOpValuesToInt(ptr.op.getOffsets()), ElementsAre(0, 0));
-    EXPECT_THAT(ptr.op.getOrder(), ElementsAre(1, 0));
-  }
-  {
-    // TODO(b/332649307): Clarify whether the 1 at index 3 should indeed be
-    // skipped. Maybe this depends on the shape? E.g. if the shape is also 1,
-    // then it's fine to skip, otherwise not.
-    auto [module, ptr] = CreateTestTensorPtr({1, 3, 4, 1, 6}, {1, 1, 1, 1, 1});
-    EXPECT_THAT(ConstOpValuesToInt(ptr.op.getShape()), ElementsAre(3, 4, 6));
-    EXPECT_THAT(TensorShape(ptr.op), ElementsAre(4, 4, 8));
-    EXPECT_THAT(ptr.boundary_checks, ElementsAre(0, 2));
+    EXPECT_THAT(ConstOpValuesToInt(ptr.op.getShape()), ElementsAre(1, 3, 4));
+    EXPECT_THAT(TensorShape(ptr.op), ElementsAre(1, 4, 4));
+    EXPECT_THAT(ptr.boundary_checks, ElementsAre(1));
     EXPECT_THAT(ConstOpValuesToInt(ptr.op.getStrides()),
-                ElementsAre(3000, 150, 1));
+                ElementsAre(300, 20, 1));
     EXPECT_THAT(ConstOpValuesToInt(ptr.op.getOffsets()), ElementsAre(0, 0, 0));
     EXPECT_THAT(ptr.op.getOrder(), ElementsAre(2, 1, 0));
   }
