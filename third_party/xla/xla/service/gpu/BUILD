@@ -757,7 +757,6 @@ cc_library(
         ":make_batch_pointers",
     ]) + if_cuda_is_configured([
         "//xla/stream_executor/cuda:cublas_plugin",
-        "//xla/stream_executor/cuda:cuda_stream",
         "//xla/stream_executor/cuda:cudnn_plugin",
         "//xla/stream_executor/cuda:cufft_plugin",
         "//xla/stream_executor/cuda:stream_executor_cuda",
@@ -3627,6 +3626,7 @@ xla_cc_test(
         "//xla/service:executable",
         "//xla/service:gpu_plugin",
         "//xla/service:platform_util",
+        "//xla/service/gpu/fusions/triton:triton_support",
         "//xla/stream_executor",
         "//xla/stream_executor:platform",
         "//xla/stream_executor:platform_manager",
@@ -3634,6 +3634,7 @@ xla_cc_test(
         "//xla/tests:xla_internal_test_main",  # build_cleaner: keep
         "@com_google_absl//absl/strings",
         "@com_google_googletest//:gtest",
+        "@llvm-project//mlir:IR",
         "@local_tsl//tsl/platform:statusor",
     ],
 )
@@ -3760,7 +3761,9 @@ cc_library(
         "//xla:status_macros",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/utils:hlo_query",
+        "//xla/service:collective_ops_utils",
         "//xla/service:computation_placer_hdr",
+        "//xla/service:global_device_id",
         "//xla/service:hlo_creation_utils",
         "//xla/service:hlo_pass",
         "@com_google_absl//absl/algorithm:container",
@@ -3781,6 +3784,7 @@ xla_cc_test(
     deps = [
         ":all_reduce_blueconnect",
         "//xla:shape_util",
+        "//xla:util",
         "//xla/hlo/ir:hlo",
         "//xla/service:computation_placer_hdr",
         "//xla/service:pattern_matcher",
@@ -6013,6 +6017,7 @@ cc_library(
         "//xla/hlo/utils:hlo_query",
         "//xla/service:collective_ops_utils",
         "//xla/service:latency_hiding_scheduler",
+        "//xla/service:profile_guided_latency_estimator",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings:string_view",
@@ -6022,5 +6027,20 @@ cc_library(
 xla_cc_test(
     name = "gpu_latency_hiding_scheduler_test",
     srcs = ["gpu_latency_hiding_scheduler_test.cc"],
-    deps = ["//xla/tests:xla_internal_test_main"],
+    deps = [
+        ":gpu_hlo_schedule",
+        ":gpu_latency_hiding_scheduler",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:hlo_module_config",
+        "//xla/service:profile_guided_latency_estimator",
+        "//xla/tests:hlo_test_base",
+        "//xla/tests:xla_internal_test_main",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+        "@local_tsl//tsl/lib/core:status_test_util",
+        "@local_tsl//tsl/platform:errors",
+        "@local_tsl//tsl/platform:statusor",
+    ],
 )
