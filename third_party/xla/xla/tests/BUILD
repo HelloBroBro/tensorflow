@@ -1827,6 +1827,7 @@ xla_test(
 xla_test(
     name = "token_hlo_test",
     srcs = ["token_hlo_test.cc"],
+    tags = ["test_xla_cpu_thunks"],
     deps = [
         ":hlo_test_base",
         ":literal_test_util",
@@ -2244,6 +2245,48 @@ xla_test(
         "@local_tsl//tsl/lib/core:status_test_util",
         "@local_tsl//tsl/platform:blocking_counter",
         "@local_tsl//tsl/platform:env",
+    ],
+)
+
+xla_test(
+    name = "collective_pipeline_parallelism_test",
+    srcs = ["collective_pipeline_parallelism_test.cc"],
+    args = ["--xla_force_host_platform_device_count=4"],
+    backend_tags = {
+        # This test is tagged "manual" because it requires multiple GPUs, and Forge only supports
+        # single-GPU tests. Guitar skips "manual" tests unless they're also tagged "guitar".
+        "gpu": [
+            "guitar",
+            "manual",
+            "multi_gpu",
+            "no_oss",
+            "notap",
+        ],
+        "cpu": [
+            "notsan",
+        ],
+    },
+    backends = [
+        "gpu",
+        "cpu",
+    ],
+    deps = [
+        ":hlo_test_base",
+        ":literal_test_util",
+        ":test_macros_header",
+        ":test_utils",
+        ":verified_hlo_module",
+        ":xla_internal_test_main",
+        "//xla:literal",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla/hlo/ir:hlo",
+        "//xla/service:executable",
+        "//xla/service:hlo_module_config",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest",
+        "@local_tsl//tsl/platform:statusor",
     ],
 )
 
