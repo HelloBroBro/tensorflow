@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 
 // The kept headers are provided for the included file `passes.h.inc`.
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -52,6 +53,15 @@ limitations under the License.
 namespace mlir {
 namespace odml {
 namespace {
+
+// Returns the shape of the given value in a Constant Op.
+arith::ConstantOp ShapeToConst(PatternRewriter& rewriter, Value value) {
+  ArrayRef<int64_t> shape = mlir::cast<ShapedType>(value.getType()).getShape();
+  auto attr_type = RankedTensorType::get({static_cast<int64_t>(shape.size())},
+                                         rewriter.getIntegerType(64));
+  auto attr = DenseElementsAttr::get(attr_type, shape);
+  return rewriter.create<arith::ConstantOp>(value.getLoc(), attr_type, attr);
+}
 
 bool IsSign(APInt a, APInt sign) {
   if (a.isZero()) return a == sign;
@@ -166,6 +176,15 @@ bool ValueGreaterThanZero(ElementsAttr float_or_int) {
 #define GEN_PASS_DEF_LEGALIZEHLOTOTFLITEPASS
 #include "tensorflow/compiler/mlir/lite/stablehlo/transforms/passes.h.inc"
 
+bool SupportedComparisonType(mhlo::ComparisonTypeAttr comp_type) {
+  if (!comp_type) return true;
+  auto c_ty = comp_type.getValue();
+  return c_ty == mhlo::ComparisonType::FLOAT ||
+         c_ty == mhlo::ComparisonType::SIGNED ||
+         c_ty == mhlo::ComparisonType::UNSIGNED ||
+         c_ty == mhlo::ComparisonType::NOTYPE;
+}
+
 class LegalizeHloToTfLitePass
     : public impl::LegalizeHloToTfLitePassBase<LegalizeHloToTfLitePass> {
  public:
@@ -187,12 +206,15 @@ bool IsNotOpLegal(mhlo::NotOp op) {
 // though MhloDialect is explicitly marked legal (which cannot be changed
 // easily).
 void AddRoundingOpsAsUnknown(ConversionTarget& target) {
-  target.addDynamicallyLegalOp<mhlo::CompareOp, mhlo::FloorOp, mhlo::SubtractOp,
-                               mhlo::AndOp, mhlo::SelectOp, mhlo::RemOp,
-                               mhlo::AddOp, mhlo::SignOp, mhlo::MulOp,
-                               mhlo::DivOp, mhlo::OrOp, mhlo::BroadcastInDimOp,
-                               mhlo::ConstantOp, mhlo::RoundOp, mhlo::TupleOp>(
+  target.addDynamicallyLegalOp<
+      mhlo::FloorOp, mhlo::SubtractOp, mhlo::AndOp, mhlo::SelectOp, mhlo::RemOp,
+      mhlo::AddOp, mhlo::SignOp, mhlo::MulOp, mhlo::DivOp, mhlo::OrOp,
+      mhlo::BroadcastInDimOp, mhlo::ConstantOp, mhlo::RoundOp, mhlo::TupleOp>(
       [](Operation* op) { return std::nullopt; });
+}
+
+bool IsCompareLegal(mhlo::CompareOp op) {
+  return !SupportedComparisonType(op.getCompareTypeAttr());
 }
 
 void SetUnaryOpLegal(ConversionTarget& target) {
@@ -224,8 +246,9 @@ void LegalizeHloToTfLitePass::runOnOperation() {
   target.addDynamicallyLegalOp<mhlo::CbrtOp>(IsCbrtLegal);
   target.addIllegalOp<mhlo::DotGeneralOp, mhlo::DotOp, mhlo::TransposeOp,
                       mhlo::ShiftRightArithmeticOp, mhlo::ShiftRightLogicalOp,
-                      mhlo::RemOp>();
+                      mhlo::RemOp, mhlo::ReshapeOp, mhlo::DynamicReshapeOp>();
   target.addDynamicallyLegalOp<mhlo::NotOp>(IsNotOpLegal);
+  target.addDynamicallyLegalOp<mhlo::CompareOp>(IsCompareLegal);
 
   AddRoundingOpsAsUnknown(target);
   SetUnaryOpLegal(target);
