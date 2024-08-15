@@ -32,10 +32,10 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "flatbuffers/flexbuffers.h"
 #include "xnnpack.h"  // from @XNNPACK
 #include "Eigen/Core"  // from @eigen_archive
 #include "flatbuffers/base.h"  // from @flatbuffers
+#include "flatbuffers/flexbuffers.h"  // from @flatbuffers
 #include "pthreadpool.h"  // from @pthreadpool
 #include "tensorflow/lite/builtin_ops.h"
 #include "tensorflow/lite/c/c_api_types.h"
@@ -6746,19 +6746,9 @@ class Subgraph {
                                    input_output_tensors);
     }
     auto flexbuffer_map = flexbuffers::GetRoot(buffer, buffer_size).AsMap();
-    size_t len = flexbuffer_map.Values().size();
-    float scale_val = len > 0 ? flexbuffer_map["scale"].AsFloat() : 0.0f;
-    float logit_cap_val =
-        len > 1 ? flexbuffer_map["logit_cap"].AsFloat() : 0.0f;
 
-    const float* scale_ptr =
-        len > 0 ? flexbuffer_map["scale"].As<FloatPointer>().ptr : nullptr;
-    const float* cap_ptr =
-        len > 1 ? flexbuffer_map["logit_cap"].As<FloatPointer>().ptr : nullptr;
-
-    // Additional verification check against the correct values.
-    if (scale_ptr) TFLITE_DCHECK(scale_val == *scale_ptr);
-    if (len > 1 && cap_ptr) TFLITE_DCHECK(logit_cap_val == *cap_ptr);
+    const float* scale_ptr = flexbuffer_map["scale"].As<FloatPointer>().ptr;
+    const float* cap_ptr = flexbuffer_map["logit_cap"].As<FloatPointer>().ptr;
 
     return VisitDotAttentionNode(subgraph, delegate, logging_context,
                                  node_index, node, tensors, scale_ptr, cap_ptr,

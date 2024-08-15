@@ -279,7 +279,7 @@ cc_library(
     name = "xnnpack_delegate_test_mode",
     srcs = ["xnnpack_delegate.cc"],
     hdrs = ["xnnpack_delegate.h"],
-    copts = tflite_copts() + ["-DXNNPACK_DELEGATE_TEST_MODE=1"],
+    copts = tflite_copts() + ["-DXNNPACK_DELEGATE_TEST_MODE=1"] + ["-DFLATBUFFERS_LOCALE_INDEPENDENT=0"],
     linkstatic = True,
     deps = [
         ":quantization_util",
