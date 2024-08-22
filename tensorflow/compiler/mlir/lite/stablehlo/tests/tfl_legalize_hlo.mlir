@@ -3103,6 +3103,10 @@ func.func @div(%arg0: tensor<2xi32>) -> tensor<2xi32> {
 
 // -----
 
+//===----------------------------------------------------------------------===//
+// mhlo ternary ops
+//===----------------------------------------------------------------------===//
+
 // CHECK-LABEL: clamp
 func.func @clamp(%arg0: tensor<f32>, %arg1: tensor<f32>, %arg2: tensor<f32>) -> tensor<f32> {
   %0 = "mhlo.clamp"(%arg0, %arg1, %arg2) : (tensor<f32>, tensor<f32>, tensor<f32>) -> tensor<f32>
@@ -3112,6 +3116,17 @@ func.func @clamp(%arg0: tensor<f32>, %arg1: tensor<f32>, %arg2: tensor<f32>) -> 
 // CHECK-NEXT: %0 = "tfl.minimum"(%arg1, %arg2)
 // CHECK-NEXT: %1 = "tfl.maximum"(%0, %arg0)
 // CHECK-NEXT: return %1 : tensor<f32>
+
+// -----
+
+// CHECK-LABEL: select
+func.func @select(%arg0: tensor<i1>, %arg1: tensor<f32>, %arg2: tensor<f32>) -> tensor<f32> {
+  %0 = "mhlo.select"(%arg0, %arg1, %arg2) : (tensor<i1>, tensor<f32>, tensor<f32>) -> tensor<f32>
+  func.return %0 : tensor<f32>
+}
+
+// CHECK:     "tfl.select"(%arg0, %arg1, %arg2)
+// CHECK-NOT: mhlo
 
 // -----
 
@@ -3183,7 +3198,7 @@ func.func @while_with_reduce(%arg0: tensor<1x256xf32>, %arg1: tensor<1xf32>) -> 
 // CHECK:     ^bb0(%arg2: tensor<i32>, %arg3: tensor<i32>, %arg4: tensor<i32>, %arg5: tensor<1x256xf32>, %arg6: tensor<1xf32>):
 // CHECK:     %1 = tfl.less(%arg2, %arg4) : (tensor<i32>, tensor<i32>) -> tensor<i1>
 // CHECK:     "tfl.yield"(%1) : (tensor<i1>) -> ()
- // CHECK:    }, {
+// CHECK:     }, {
 // CHECK:     ^bb0(%arg2: tensor<i32>, %arg3: tensor<i32>, %arg4: tensor<i32>, %arg5: tensor<1x256xf32>, %arg6: tensor<1xf32>):
 // CHECK:     %1 = mhlo.add %arg2, %arg3 : tensor<i32>
 // CHECK:     %2 = mhlo.constant dense<0.000000e+00> : tensor<f32>
@@ -3196,7 +3211,6 @@ func.func @while_with_reduce(%arg0: tensor<1x256xf32>, %arg1: tensor<1xf32>) -> 
 
 // -----
 
-
 //===----------------------------------------------------------------------===//
 // mhlo.get_dimension_size
 //===----------------------------------------------------------------------===//
@@ -3207,9 +3221,10 @@ func.func @get_dimension_size(%arg0: tensor<4x256x?xf32>) -> tensor<i32> {
   func.return %0 : tensor<i32>
 }
 
-// CHECK: %0  = "tfl.shape"(%arg0) : (tensor<4x256x?xf32>) -> tensor<3xi64>
+// CHECK:     %0 = "tfl.shape"(%arg0) : (tensor<4x256x?xf32>) -> tensor<3xi64>
 // CHECK-DAG: %cst = arith.constant dense<1> : tensor<1xi64>
 // CHECK-DAG: %cst_0 = arith.constant dense<1> : tensor<1xi64>
 // CHECK:     %1 = "tfl.slice"(%0, %cst_0, %cst) : (tensor<3xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<1xi64>
-// CHECK:     %2 = "tfl.squeeze"(%1) <{squeeze_dims = [0]}> : (tensor<1xi64>) -> tensor<i32>
-// CHECK:     return %2 : tensor<i32>
+// CHECK:     %2 = "tfl.cast"(%1) : (tensor<1xi64>) -> tensor<1xi32>
+// CHECK:     %3 = "tfl.squeeze"(%2) <{squeeze_dims = [0]}> : (tensor<1xi32>) -> tensor<i32>
+// CHECK:     return %3 : tensor<i32>
