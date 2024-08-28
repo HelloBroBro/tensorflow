@@ -424,6 +424,7 @@ cc_library(
         "//tensorflow/lite/schema:schema_fbs",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@eigen_archive//:eigen3",
         "@llvm-project//llvm:Support",
@@ -1700,6 +1701,7 @@ cc_library(
     visibility = [
         "//tensorflow/compiler/mlir/lite/core:__pkg__",
         "//tensorflow/lite:__pkg__",
+        "//tensorflow/lite/core:__pkg__",
     ],
     deps = ["//tensorflow/compiler/mlir/lite/core/api:error_reporter"],
 )
