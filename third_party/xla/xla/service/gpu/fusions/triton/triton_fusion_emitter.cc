@@ -2325,6 +2325,31 @@ class Scopes {
   Value pid_n_;
 };
 
+enum MaskExpandDimension { kMajor = 0, kMinor = 1 };
+
+Value EmitMaskOnInput(ImplicitLocOpBuilder& b,
+                      MaskExpandDimension expand_dimension, Value input,
+                      int denom, Value k, int64_t dims_k, int64_t block_k,
+                      Value pid_k) {
+  auto c32 = [&](int64_t v) { return CreateConst(b, b.getI32Type(), v); };
+  auto elements_in_tile = b.create<ma::SubIOp>(c32(dims_k / denom), k);
+  int size = block_k / denom;
+  auto range_k = Range(b, size);
+  if (pid_k != nullptr) {
+    range_k = b.create<ma::AddIOp>(
+        range_k, Splat(b, b.create<ma::MulIOp>(pid_k, c32(size)), size));
+  }
+  auto ty = mlir::cast<mlir::RankedTensorType>(input.getType());
+  TensorValue range_expanded = mlir::cast<TensorValue>(
+      b.create<mt::ExpandDimsOp>(range_k, expand_dimension).getResult());
+  Value mask = b.create<mt::BroadcastOp>(
+      ty.clone(b.getI1Type()),
+      b.create<ma::CmpIOp>(
+          ma::CmpIPredicate::slt, range_expanded,
+          Splat(b, elements_in_tile, range_expanded.getType().getShape())));
+  return b.create<ma::SelectOp>(mask, input, ZerosLike(b, input));
+}
+
 }  // namespace
 
 // Variable naming: lhs [m, k] x rhs [k, n] -> out [m, n].
@@ -2498,27 +2523,12 @@ absl::Status EmitMatMul(mlir::OpBuilder builder,
     // the other two get discarded by the masked store at the end.
     const bool need_masking = dims.k % (block_k * split_k) > 0;
     if (need_masking) {
-      auto apply_mask = [&](int64_t dim, Value input, int denom) {
-        auto elements_in_tile = b.create<ma::SubIOp>(c32(dims.k / denom), ki);
-        int size = block_k / denom;
-        auto range_k = Range(b, size);
-        if (scopes.pid_k() != nullptr) {
-          range_k = b.create<ma::AddIOp>(
-              range_k,
-              Splat(b, b.create<ma::MulIOp>(scopes.pid_k(), c32(size)), size));
-        }
-        auto ty = mlir::cast<mlir::RankedTensorType>(input.getType());
-        TensorValue range_expanded = mlir::cast<TensorValue>(
-            b.create<mt::ExpandDimsOp>(range_k, dim).getResult());
-        Value mask = b.create<mt::BroadcastOp>(
-            ty.clone(b.getI1Type()),
-            b.create<ma::CmpIOp>(ma::CmpIPredicate::slt, range_expanded,
-                                 Splat(b, elements_in_tile,
-                                       range_expanded.getType().getShape())));
-        return b.create<ma::SelectOp>(mask, input, ZerosLike(b, input));
-      };
-      dot_input_lhs = apply_mask(0, dot_input_lhs, is_sparse ? 2 : 1);
-      dot_input_rhs = apply_mask(1, dot_input_rhs, 1);
+      dot_input_lhs = EmitMaskOnInput(b, MaskExpandDimension::kMajor,
+                                      dot_input_lhs, is_sparse ? 2 : 1, ki,
+                                      dims.k, block_k, scopes.pid_k());
+      dot_input_rhs =
+          EmitMaskOnInput(b, MaskExpandDimension::kMinor, dot_input_rhs, 1, ki,
+                          dims.k, block_k, scopes.pid_k());
       // Masking the metadata is not necessary, as the inputs are masked
       // (i.e. zeroed out), so the padded metadata can hold any values.
     }
@@ -2677,20 +2687,20 @@ absl::StatusOr<Value> ComputeBasePtrOffset(
 namespace ir_emitter_triton_internal {
 
 SmallVector<Value, 3> ComputeDelinearizedTileIndex(
-    ImplicitLocOpBuilder& b, const TiledHloComputation& tiled_hlo_computation) {
+    ImplicitLocOpBuilder& b,
+    absl::Span<const int64_t> num_output_tiles_per_dim) {
   Value pid = b.create<ma::IndexCastUIOp>(
       b.getIndexType(), b.create<mt::GetProgramIdOp>(mt::ProgramIDDim::X));
 
   // Delinearize the block id.
   mlir::AffineExpr program_id = mlir::getAffineDimExpr(0, b.getContext());
   auto tile_exprs =
-      DelinearizeIndex(tiled_hlo_computation.num_output_tiles_per_dim(),
-                       program_id, b.getContext());
+      DelinearizeIndex(num_output_tiles_per_dim, program_id, b.getContext());
 
   IndexingMap program_id_to_root_tile_offset = IndexingMap::FromTensorSizes(
       mlir::AffineMap::get(/*dimCount=*/1, /*symbolCount=*/0, tile_exprs,
                            b.getContext()),
-      /*dim_upper_bounds=*/{tiled_hlo_computation.num_output_tiles()},
+      /*dim_upper_bounds=*/{Product(num_output_tiles_per_dim)},
       /*symbol_upper_bounds=*/{});
 
   return mlir_converter::ApplyIndexing(program_id_to_root_tile_offset,
@@ -2784,7 +2794,7 @@ absl::Status EmitGeneric(mlir::OpBuilder builder,
   SymbolicTileAnalysisOrError symbolic_tile_analysis_or =
       SymbolicTileAnalysis::AnalyzeComputation(
           *computation, builder.getContext(),
-          TritonEmitterConstraints::GetBuilder());
+          TritonEmitterConstraints::GetBuilder(device_info));
   if (std::holds_alternative<FusionDecision>(symbolic_tile_analysis_or)) {
     return Internal(
         "Unsupported fusion in EmitGeneric: %s",
@@ -2805,7 +2815,7 @@ absl::Status EmitGeneric(mlir::OpBuilder builder,
 
   SmallVector<Value, 3> tile_multi_index =
       ir_emitter_triton_internal::ComputeDelinearizedTileIndex(
-          b, tiled_hlo_computation);
+          b, tiled_hlo_computation.num_output_tiles_per_dim());
 
   TF_ASSIGN_OR_RETURN(
       Value result,
