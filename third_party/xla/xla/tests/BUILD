@@ -217,8 +217,10 @@ cc_library(
         "//xla/tsl/lib/core:status_test_util",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/types:span",
+        "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:logging",
         "@local_tsl//tsl/platform:test",
     ],
@@ -3006,7 +3008,7 @@ xla_test(
 xla_test(
     name = "iota_test",
     srcs = ["iota_test.cc"],
-    shard_count = 30,
+    shard_count = 50,
     tags = [
         # Require optimized builds, iota_test_cpu is very slow in fastbuild.
         "optonly",
@@ -3018,7 +3020,13 @@ xla_test(
         ":test_macros_header",
         ":xla_internal_test_main",
         "//xla:error_spec",
-        "@local_tsl//tsl/platform:errors",
+        "//xla:shape_util",
+        "//xla:types",
+        "//xla:xla_data_proto_cc",
+        "//xla/client:xla_builder",
+        "@com_google_absl//absl/log:check",
+        "@com_google_googletest//:gtest_main",
+        "@local_tsl//tsl/platform:ml_dtypes",
     ],
 )
 

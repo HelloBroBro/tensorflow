@@ -281,6 +281,17 @@ CodegenDecision CanTritonHandleReduce(
   return "Reduction is not a row-reduction of a single operand.";
 }
 
+// Filters Slices which can be handled using Triton.
+CodegenDecision CanTritonHandleSlice(
+    const HloSliceInstruction& slice,
+    const se::GpuComputeCapability& gpu_version) {
+  // Only contiguous slices are supported for now.
+  if (IsSliceWithUnitStrides(&slice)) {
+    return CodegenDecision{};
+  }
+  return "Only contiguous Slice operations are supported.";
+}
+
 CodegenDecision IsTritonSupportedInstructionImpl(
     const HloInstruction& instr, const se::GpuComputeCapability& gpu_version,
     bool is_within_reduction_computation) {
@@ -328,8 +339,11 @@ CodegenDecision IsTritonSupportedInstructionImpl(
       return CanTritonHandleReduce(*Cast<HloReduceInstruction>(&instr),
                                    gpu_version);
     }
+    case HloOpcode::kSlice: {
+      return CanTritonHandleSlice(*Cast<HloSliceInstruction>(&instr),
+                                  gpu_version);
+    }
     case HloOpcode::kTranspose:
-    case HloOpcode::kSlice:
     case HloOpcode::kParameter:
     case HloOpcode::kBroadcast:
     case HloOpcode::kBitcast:
