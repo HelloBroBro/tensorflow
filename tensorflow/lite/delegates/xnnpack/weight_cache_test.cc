@@ -56,7 +56,7 @@ using testing::Ge;
 class TempFileDesc {
  public:
   static constexpr struct AutoClose {
-  } kAutoCLose{};
+  } kAutoClose{};
 
 #if defined(_MSC_VER)
   TempFileDesc() : fd_() {
@@ -316,10 +316,10 @@ TEST(WeightCacheBuilderTest, NonExistingPathFails) {
   EXPECT_FALSE(builder.Start("/seldf/sedsft"));
 }
 
-#if TFLITE_XNNPACK_ENABLE_IN_MEMORY_WEIGHT_CACHE
 TEST(WeightCacheBuilderTest, InMemoryCacheTriggeredByCorrectPrefix) {
+  TfLiteXNNPackDelegateCanUseInMemoryWeightCacheProvider();
   if (!TfLiteXNNPackDelegateCanUseInMemoryWeightCacheProvider()) {
-    GTEST_SKIP() << "In-memory weight cache is enabled for this build but "
+    GTEST_SKIP() << "In-memory weight cache isn't enabled for this build or "
                     "isn't supported by the current system, skipping test.";
   }
   {  // Exact in-memory flag used starts an in-memory build.
@@ -341,11 +341,6 @@ TEST(WeightCacheBuilderTest, InMemoryCacheTriggeredByCorrectPrefix) {
     EXPECT_EQ(errno, ENOENT);
   }
 }
-#else
-TEST(WeightCacheBuilderTest, InMemoryCacheTriggeredByCorrectPrefix) {
-  GTEST_SKIP() << "In-memory weight cache isn't enabled, skipping test.";
-}
-#endif
 
 struct FakeContext {
   // Adds a new tensor and it's backing buffer to the context.
@@ -548,7 +543,7 @@ TEST_F(BuildMMapWeightCacheProviderTest,
 
 TEST_F(BuildMMapWeightCacheProviderTest, FinalizeWorks) {
   enum { kWeightIndex1, kBiasIndex, kWeightIndex2 };
-  TempFileDesc tmp_file(TempFileDesc::kAutoCLose);
+  TempFileDesc tmp_file(TempFileDesc::kAutoClose);
   ASSERT_TRUE(cache_provider.StartBuild(tmp_file.GetCPath()));
 
   ctx.PackTensors(&cache_provider.GetCacheProvider(), kAlgoSeed1, kWeightIndex1,
@@ -654,7 +649,7 @@ TEST_F(LoadMMapWeightCacheProviderTest, LookUpSucceeds) {
 
 TEST(MMapWeightCacheProviderTest, XnnpackCApiJourney) {
   using std::size;
-  TempFileDesc temp_fd(TempFileDesc::kAutoCLose);
+  TempFileDesc temp_fd(TempFileDesc::kAutoClose);
   const int32_t fake_packing_algo_seed = 0xBA0BAB;
   const char packed_data_ref_1[] = "abcdefghij";
   const char packed_data_ref_2[] = "klmnopqr";

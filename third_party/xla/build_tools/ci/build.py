@@ -29,7 +29,7 @@ import logging
 import os
 import subprocess
 import sys
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # TODO(ddunleavy): move this to the bazelrc
@@ -86,7 +86,7 @@ class Build:
 
   type_: BuildType
   repo: str
-  image_url: str
+  image_url: Optional[str]
   target_patterns: Tuple[str, ...]
   configs: Tuple[str, ...] = ()
   build_tag_filters: Tuple[str, ...] = ()
@@ -115,6 +115,7 @@ class Build:
     return ["bazel", "test", *all_options, "--", *self.target_patterns]
 
   def docker_run_command(self, *, command: str, **kwargs: Any) -> List[str]:
+    assert self.image_url, "`docker run` has no meaning without an image."
     options = _dict_to_cli_options(kwargs)
 
     return ["docker", "run", *options, self.image_url, command]
@@ -133,13 +134,15 @@ class Build:
 
     cmds.extend(self.extra_setup_commands)
 
+    using_docker = self.image_url is not None
+
     # pyformat:disable
 
     if self.type_ == BuildType.CPU_ARM64:
       # We would need to install parallel, but `apt` hangs regularly on Kokoro
       # VMs due to yaqs/eng/q/4506961933928235008
       cmds.append(["docker", "pull", self.image_url])
-    else:
+    elif using_docker:
       # This is a slightly odd use of parallel, we aren't doing anything besides
       # retrying after 15 seconds up to 3 times if `docker pull` fails.
       cmds.append(["parallel", "--ungroup", "--retries", "3", "--delay", "15",
@@ -148,16 +151,26 @@ class Build:
     container_name = "xla_ci"
     _, repo_name = self.repo.split("/")
 
-    cmds.append(
-        self.docker_run_command(command="bash", detach=True,
-                                name=container_name, rm=True, interactive=True,
-                                tty=True, volume="./github:/github",
-                                workdir=f"/github/{repo_name}"))
+    if using_docker:
+      cmds.append(
+          self.docker_run_command(command="bash", detach=True,
+                                  name=container_name, rm=True,
+                                  interactive=True, tty=True,
+                                  volume="./github:/github",
+                                  workdir=f"/github/{repo_name}"))
     # pyformat:enable
-    docker_exec = lambda cmd: ["docker", "exec", container_name, *cmd]
-    cmds.append(docker_exec(self.bazel_test_command()))
-    cmds.append(docker_exec(["bazel", "analyze-profile", "profile.json.gz"]))
-    cmds.append(["docker", "stop", container_name])
+
+    # Prepend `docker exec <container_name>` iff we are using docker.
+    maybe_docker_exec = (
+        ["docker", "exec", container_name] if using_docker else []
+    )
+    cmds.append(maybe_docker_exec + self.bazel_test_command())
+    cmds.append(
+        maybe_docker_exec + ["bazel", "analyze-profile", "profile.json.gz"]
+    )
+
+    if using_docker:
+      cmds.append(["docker", "stop", container_name])
 
     return cmds
 
@@ -353,10 +366,27 @@ _KOKORO_JOB_NAME_TO_BUILD_MAP = {
 }
 
 
+def dump_all_build_commands():
+  """Used to generate what commands are run for each build."""
+  # Awkward workaround b/c Build instances are not hashable
+  type_to_build = {b.type_: b for b in _KOKORO_JOB_NAME_TO_BUILD_MAP.values()}
+  for t in sorted(type_to_build.keys(), key=str):
+    build = type_to_build[t]
+    sys.stdout.write(f"# BEGIN {build.type_}\n")
+    for cmd in build.commands():
+      sys.stdout.write(" ".join(cmd) + "\n")
+    sys.stdout.write(f"# END {build.type_}\n")
+
+
 def main():
   logging.basicConfig()
   logging.getLogger().setLevel(logging.INFO)
   kokoro_job_name = os.getenv("KOKORO_JOB_NAME")
+
+  if kokoro_job_name == "GOLDENS":  # HACK!!
+    dump_all_build_commands()
+    return
+
   build = _KOKORO_JOB_NAME_TO_BUILD_MAP[kokoro_job_name]
 
   for cmd in build.commands():
