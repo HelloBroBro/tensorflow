@@ -270,6 +270,7 @@ cc_library(
     local_defines = if_rocm_is_configured(["TENSORFLOW_USE_ROCM=1"]),
     deps = [
         "//xla/stream_executor:device_description",
+        "//xla/stream_executor:semantic_version",
     ],
 )
 
@@ -1405,6 +1406,7 @@ cc_library(
         "@llvm-project//mlir:Support",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/ir:hlo_module_group",
+        "//xla/pjrt/distributed:key_value_store_interface",
         "//xla/service/gpu/autotuning:autotuner_util",
         "//xla/service/gpu/autotuning:custom_kernel_fusion_autotuner",
         "//xla/service/gpu/fusions/triton:triton_support",
@@ -1466,6 +1468,7 @@ cc_library(
         "//xla/service:all_reduce_promotion",
         "//xla/service:all_reduce_reassociate",
         "//xla/service:async_collective_creator",
+        "//xla/service:batched_gather_scatter_normalizer",
         "//xla/service:batchnorm_expander",
         "//xla/service:bitcast_dtypes_expander",
         "//xla/service:broadcast_canonicalizer",
@@ -1563,6 +1566,7 @@ cc_library(
         "//xla/stream_executor:device_description_proto_cc",
         "//xla/stream_executor:dnn",
         "//xla/stream_executor:platform_manager",
+        "//xla/stream_executor:semantic_version",
         "//xla/translate/hlo_to_mhlo:hlo_utils",
         "//xla/translate/mhlo_to_hlo:location_exporter",
         "//xla:autotune_results_proto_cc",
@@ -1791,7 +1795,6 @@ cc_library(
         "@com_google_absl//absl/base",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/cleanup",
-        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:node_hash_map",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
@@ -1805,7 +1808,6 @@ cc_library(
         "@llvm-project//llvm:IRReader",
         "@llvm-project//llvm:Support",
         "@llvm-project//llvm:ir_headers",
-        "@local_config_cuda//cuda:cuda_headers",
         "@local_tsl//tsl/platform:env",
         "@local_tsl//tsl/platform:errors",
         "@local_tsl//tsl/platform:path",
@@ -1999,6 +2001,8 @@ cc_library(
         "//xla/stream_executor:device_description",
         "//xla/stream_executor:device_memory_allocator",
         "//xla/stream_executor:dnn",
+        "//xla/stream_executor:semantic_version",
+        "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/rocm:rocm_platform_id",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
@@ -2730,7 +2734,7 @@ cc_library(
 
 xla_test(
     name = "dot_algorithm_support_test",
-    srcs = if_gpu_is_configured(["dot_algorithm_support_test.cc"]),
+    srcs = ["dot_algorithm_support_test.cc"],
     backends = [
         "gpu_v100",
         "gpu_a100",
@@ -2745,6 +2749,7 @@ xla_test(
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/stream_executor:device_description",
+        "//xla/stream_executor:semantic_version",
         "//xla/tests:hlo_test_base",
         "//xla/tests:xla_internal_test_main",  # fixdeps: keep
         "@com_google_absl//absl/strings",
