@@ -697,8 +697,8 @@ GpuCommandBuffer::CreateConditionalCommandBuffers(
   bool is_owned_graph = false;
 
   for (size_t i = 0; i < handles.size(); ++i) {
-    auto command_buffer =
-        parent_->CreateCommandBuffer(nested, graphs[i], is_owned_graph);
+    auto command_buffer = std::make_unique<GpuCommandBuffer>(
+        nested, parent_, graphs[i], is_owned_graph);
     TF_RETURN_IF_ERROR(builders[i](command_buffer.get(), handles[i]));
     TF_RETURN_IF_ERROR(command_buffer->Finalize());
 
@@ -955,27 +955,6 @@ absl::Status GpuCommandBuffer::While(ExecutionScopeId execution_scope_id,
 absl::Status GpuCommandBuffer::Finalize() {
   TF_RETURN_IF_ERROR(CheckNotFinalized());
 
-  // Collect number of nodes and conditionals for logging below.
-  size_t num_nodes = 0, num_cond_cmd_buffers = 0;
-  for (auto& [_, execution_scope] : execution_scopes_) {
-    num_nodes += execution_scope.nodes.size();
-    num_cond_cmd_buffers += execution_scope.conditional_command_buffers.size();
-  }
-
-  // TODO(b/362769658): Remove this workaround when cuda supports conditionals
-  // with empty graphs.
-#if !defined(TENSORFLOW_USE_ROCM)
-  if (num_nodes == 0) {
-    GpuGraphNodeHandle empty_node_handle = nullptr;
-    TF_ASSIGN_OR_RETURN(NoOpKernel * noop, GetNoOpKernel());
-
-    TF_RETURN_IF_ERROR(GpuDriver::GraphAddKernelNode(
-        &empty_node_handle, graph_, /*deps=*/{}, "noop",
-        AsGpuKernel(&**noop)->gpu_function(), 1, 1, 1, 1, 1, 1, 0,
-        /*kernel_params=*/nullptr, /*extra=*/nullptr));
-  }
-#endif
-
   // Maybe dump created CUDA graph to a dot file for debugging.
   if (state_ == State::kCreate && VLOG_IS_ON(10)) {
     std::string path = tsl::io::GetTempFilename(/*extension=*/"dot");
@@ -985,6 +964,13 @@ absl::Status GpuCommandBuffer::Finalize() {
       VLOG(100) << "Printed Gpu graph " << graph_ << " to: " << path << "\n"
                 << *printed;
     }
+  }
+
+  // Collect number of nodes and conditionals for logging below.
+  size_t num_nodes = 0, num_cond_cmd_buffers = 0;
+  for (auto& [_, execution_scope] : execution_scopes_) {
+    num_nodes += execution_scope.nodes.size();
+    num_cond_cmd_buffers += execution_scope.conditional_command_buffers.size();
   }
 
   if (mode_ == Mode::kPrimary && state_ == State::kCreate) {
@@ -1004,7 +990,7 @@ absl::Status GpuCommandBuffer::Finalize() {
                    << "; conditionals: " << num_cond_cmd_buffers
                    << "; alive executable graphs: " << AliveExecs();
 
-      TF_RETURN_IF_ERROR(GpuDriver::DeviceGraphMemTrim(parent_->device()));
+      TF_RETURN_IF_ERROR(parent_->TrimGraphMemory());
 
       auto retry = GpuDriver::GraphInstantiate(&exec_, graph_, flags);
       if (retry.code() == absl::StatusCode::kResourceExhausted) {
