@@ -594,8 +594,8 @@ cc_library(
         "//xla/stream_executor:stream",
         "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor/cuda:cuda_platform_id",
-        "//xla/stream_executor/gpu:gpu_activation",
         "//xla/stream_executor/gpu:gpu_executor_header",
+        "//xla/stream_executor/gpu:scoped_activate_context",
         "//xla/stream_executor/rocm:rocm_platform_id",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:core_headers",
@@ -1213,6 +1213,7 @@ cc_library(
         "//xla/stream_executor/rocm:rocm_platform_id",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:node_hash_map",
         "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/status",
@@ -1948,7 +1949,10 @@ cc_library(
         "amdgpu_compiler_registration.cc",
     ],
     local_defines = if_rocm_is_configured(["TENSORFLOW_USE_ROCM=1"]),
-    tags = ["manual"],
+    tags = [
+        "gpu",
+        "manual",
+    ],
     deps = [
         ":amdgpu_compiler_impl",
         "//xla/service:compiler",
@@ -1965,7 +1969,10 @@ cc_library(
     hdrs = [
         "amdgpu_compiler.h",
     ],
-    tags = ["manual"],
+    tags = [
+        "gpu",
+        "manual",
+    ],
     deps = [
         ":cublas_padding_requirements",
         ":gpu_compiler",
@@ -2033,7 +2040,6 @@ cc_library(
     srcs = [
         "infeed_manager.cc",
         "outfeed_manager.cc",
-        "xla_executor_state.h",
     ],
     hdrs = [
         "infeed_manager.h",
@@ -2048,7 +2054,6 @@ cc_library(
         "//xla:util",
         "//xla/stream_executor:device_memory_handle",
         "//xla/stream_executor:stream_executor_h",
-        "//xla/stream_executor/gpu:gpu_executor_header",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
