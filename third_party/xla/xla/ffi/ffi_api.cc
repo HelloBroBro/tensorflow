@@ -18,7 +18,6 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <new>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -26,6 +25,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/base/optimization.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/numeric/bits.h"
 #include "absl/status/status.h"
@@ -46,8 +46,10 @@ limitations under the License.
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/device_memory_allocator.h"
 #include "xla/stream_executor/stream.h"
+#include "xla/tsl/concurrency/async_value.h"
 #include "xla/tsl/concurrency/async_value_ref.h"
 #include "xla/tsl/concurrency/chain.h"
+#include "xla/tsl/concurrency/ref_count.h"
 #include "xla/util.h"
 #include "tsl/platform/logging.h"
 #include "tsl/platform/statusor.h"
@@ -146,6 +148,24 @@ absl::Status Call(Ffi& handler, CallFrame& call_frame,
   } catch (std::exception& e) {
     return Unknown("XLA FFI call failed: %s", e.what());
   }
+
+  // If FFI handler returned synchronous error, it must not launch any
+  // asynchronous work that can also return an error.
+  if (error != nullptr) {
+    DCHECK_EQ(ffi_call_frame.future, nullptr)
+        << "Error must not be used together with a future";
+  }
+
+  // Wait for the completion of asynchronous work launched by the handler.
+  if (XLA_FFI_Future* future = ffi_call_frame.future;
+      ABSL_PREDICT_FALSE(future != nullptr)) {
+    absl::Cleanup delete_future = [&] { delete future; };
+    tsl::BlockUntilReady(future->async_value);
+    if (ABSL_PREDICT_FALSE(future->async_value.IsError())) {
+      return future->async_value.GetError();
+    }
+  }
+
   return TakeStatus(error);
 }
 
@@ -160,6 +180,24 @@ absl::Status Call(XLA_FFI_Handler* handler, CallFrame& call_frame,
   } catch (std::exception& e) {
     return Unknown("XLA FFI call failed: %s", e.what());
   }
+
+  // If FFI handler returned synchronous error, it must not launch any
+  // asynchronous work that can also return an error.
+  if (error != nullptr) {
+    DCHECK_EQ(ffi_call_frame.future, nullptr)
+        << "Error must not be used together with a future";
+  }
+
+  // Wait for the completion of asynchronous work launched by the handler.
+  if (XLA_FFI_Future* future = ffi_call_frame.future;
+      ABSL_PREDICT_FALSE(future != nullptr)) {
+    absl::Cleanup delete_future = [&] { delete future; };
+    tsl::BlockUntilReady(future->async_value);
+    if (ABSL_PREDICT_FALSE(future->async_value.IsError())) {
+      return future->async_value.GetError();
+    }
+  }
+
   return TakeStatus(error);
 }
 
@@ -471,15 +509,6 @@ static XLA_FFI_Error* XLA_FFI_Future_Create(XLA_FFI_Future_Create_Args* args) {
   return nullptr;
 }
 
-static XLA_FFI_Error* XLA_FFI_Future_Destroy(
-    XLA_FFI_Future_Destroy_Args* args) {
-  XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
-      "XLA_FFI_Future_Destroy", XLA_FFI_Future_Destroy_Args_STRUCT_SIZE,
-      args->struct_size));
-  delete args->future;
-  return nullptr;
-}
-
 static XLA_FFI_Error* XLA_FFI_Future_SetAvailable(
     XLA_FFI_Future_SetAvailable_Args* args) {
   XLA_FFI_RETURN_IF_ERROR(ActualStructSizeIsGreaterOrEqual(
@@ -723,6 +752,14 @@ static XLA_FFI_Error* XLA_FFI_INTERNAL_Error_Forward(void* status) {
   return new XLA_FFI_Error{std::move(*absl_status)};
 }
 
+static XLA_FFI_Future* XLA_FFI_INTERNAL_Future_Forward(void* async_value) {
+  auto* tsl_async_value = reinterpret_cast<tsl::AsyncValue*>(async_value);
+  DCHECK(tsl_async_value) << "Async value must not be null";
+
+  return new XLA_FFI_Future{
+      tsl::AsyncValueRef<tsl::Chain>(tsl::FormRef(tsl_async_value))};
+}
+
 static void* XLA_FFI_INTERNAL_Stream_Get(XLA_FFI_ExecutionContext* ctx) {
   if (auto* gpu = std::get_if<XLA_FFI_ExecutionContext::GpuContext>(
           &ctx->backend_context)) {
@@ -782,6 +819,7 @@ extern "C" const XLA_FFI_Api* XLA_FFI_GetApi() { return GetXlaFfiApi(); }
 
 static XLA_FFI_InternalApi internal_api = {
     XLA_FFI_INTERNAL_Error_Forward,
+    XLA_FFI_INTERNAL_Future_Forward,
     XLA_FFI_INTERNAL_Stream_Get,
     XLA_FFI_INTERNAL_DeviceOrdinal_Get,
     XLA_FFI_INTERNAL_DeviceMemoryAllocator_Get,
@@ -817,7 +855,6 @@ static XLA_FFI_Api api = {
     XLA_FFI_DeviceMemory_Free,
     XLA_FFI_ThreadPool_Schedule,
     XLA_FFI_Future_Create,
-    XLA_FFI_Future_Destroy,
     XLA_FFI_Future_SetAvailable,
     XLA_FFI_Future_SetError,
 };

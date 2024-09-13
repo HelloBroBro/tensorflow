@@ -50,13 +50,14 @@ load(
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = internal_visibility([
+        "//learning/dist_belief_extra/gpu:__subpackages__",
         "//tensorflow/compiler/tf2xla:__subpackages__",
         "//xla:__subpackages__",
         "//tensorflow/core/kernels:__subpackages__",
         "//xla/pjrt:__subpackages__",
         "//xla/service/gpu:__subpackages__",
         "//xla/stream_executor:__subpackages__",
-        "//tensorflow/core/common_runtime/gpu:__subpackages__",
+        "//tensorflow/core:__subpackages__",
         "//third_party/sparse_conv:__subpackages__",
         "//waymo/ml/compiler/triton:__subpackages__",
     ]),
@@ -146,15 +147,9 @@ xla_cc_test(
 
 gpu_only_cc_library(
     name = "gpu_activation",
-    srcs = ["gpu_activation.cc"],
     hdrs = ["gpu_activation.h"],
     deps = [
-        ":context",
-        ":gpu_activation_header",
-        ":gpu_driver_header",
-        ":gpu_executor_header",
         ":scoped_activate_context",
-        "//xla/stream_executor",
     ],
 )
 
