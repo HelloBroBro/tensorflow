@@ -3399,28 +3399,16 @@ const PtrVec<HloComputation*>& HloInstruction::branch_computations() const {
   return called_computations();
 }
 
-int32_t HloInstruction::branch_count() const {
+int HloInstruction::branch_count() const {
   CHECK(HloOpcode::kConditional == opcode_);
   return called_computations().size();
 }
 
-HloComputation* HloInstruction::branch_computation(int32_t b) const {
-  CHECK_EQ(HloOpcode::kConditional, opcode_);
+HloComputation* HloInstruction::branch_computation(int b) const {
+  CHECK(HloOpcode::kConditional == opcode_);
   CHECK_GE(b, 0);
   CHECK_LT(b, called_computations().size());
   return called_computations()[b];
-}
-
-int32_t HloInstruction::branch_index(HloComputation* computation) const {
-  CHECK_EQ(HloOpcode::kConditional, opcode_);
-  CHECK_NE(computation, nullptr);
-  for (int32_t idx = 0; idx < branch_count(); idx++) {
-    if (branch_computation(idx) == computation) {
-      return idx;
-    }
-  }
-  LOG(FATAL) << absl::StrFormat("Conditional %s does not contain branch %s",
-                                name(), computation->name());
 }
 
 void HloInstruction::set_branch_computation(int b,
@@ -4106,20 +4094,7 @@ HloInstructionProto HloInstruction::ToProto() const {
   *proto.mutable_statistics_viz() = statistics_viz();
 
   if (original_value_) {
-    xla::OriginalValueProto* original_value_proto =
-        proto.mutable_original_value();
-    for (const auto& leaf : original_value_->leaves()) {
-      OriginalArrayProto* original_array_proto =
-          original_value_proto->add_leaves();
-      for (const auto& index : leaf.first) {
-        original_array_proto->add_leaf_shape_index(index);
-      }
-      *original_array_proto->mutable_instruction_name() =
-          leaf.second->instruction_name;
-      for (const auto& index : leaf.second->shape_index) {
-        original_array_proto->add_shape_index(index);
-      }
-    }
+    *proto.mutable_original_value() = OriginalValueToProto(*original_value_);
   }
 
   return proto;
