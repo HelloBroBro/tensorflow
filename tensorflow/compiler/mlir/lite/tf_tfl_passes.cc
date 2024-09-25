@@ -28,6 +28,7 @@ limitations under the License.
 #include "mlir/Transforms/Passes.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/common/tfl_pass_config.h"
 #include "tensorflow/compiler/mlir/lite/converter_flags.pb.h"
+#include "tensorflow/compiler/mlir/lite/core/macros.h"
 #include "tensorflow/compiler/mlir/lite/quantization/quantization_passes.h"
 #include "tensorflow/compiler/mlir/lite/quantization/tensorflow/passes.h"
 #include "tensorflow/compiler/mlir/lite/stablehlo/transforms/legalize_tf_xla_call_module_to_stablehlo_pass.h"
@@ -194,6 +195,13 @@ void AddPreQuantizationStableHloToTfPasses(
   // to be consistent with other entrypoints.
   pass_manager.addPass(mlir::mhlo::createHloLegalizeToStablehloPass());
 
+  // Expand backward compatibility with the given StableHLO version by
+  // decomposing newer StableHLO operations into equivalent operations supported
+  // by that older version.
+  pass_manager.addNestedPass<mlir::func::FuncOp>(
+      mlir::stablehlo_ext::createStablehloCreateCompatibilityExpanderPass(
+          tflite_supported_stablehlo_version));
+
   // Decompose CHLO into StableHLO ops
   pass_manager.addNestedPass<mlir::func::FuncOp>(
       mlir::odml::CreateLegalizeChloToTflPass());
@@ -287,12 +295,12 @@ void AddPostQuantizationStableHloToTfPasses(
     // TODO: b/354280588 - Rewrite this pass into a pattern in PrepareHloPass.
     pass_manager.addPass(mlir::odml::CreateUnfoldSplatConstantPass());
     pass_manager.addPass(mlir::odml::CreateLegalizeHloToTfLitePass());
-    // Folds tfl.BroadcastTo ops with subsequent ops if they have built in
+    // Folds TFL broadcasting ops with subsequent ops if they have built in
     // broadcasting support. This needs to be run immediately after HLO->TFL
     // legalization, otherwise the newly generated TFL broadcast ops can fold
     // and materialize the weights.
     pass_manager.addNestedPass<mlir::func::FuncOp>(
-        mlir::odml::CreateFoldBroadcastToPass());
+        mlir::odml::CreateFoldBroadcastingOpPass());
   }
   // folds tf.BroadcastTo ops with subsequent ops if they have built in
   // broadcasting support. This needs to be run immediately after HLO->TF
