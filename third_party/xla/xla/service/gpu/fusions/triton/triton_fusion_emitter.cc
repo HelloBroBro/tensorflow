@@ -106,6 +106,7 @@ limitations under the License.
 #include "xla/literal.h"
 #include "xla/mlir_hlo/mhlo/IR/hlo_ops.h"
 #include "xla/mlir_hlo/mhlo/transforms/map_mhlo_to_scalar_op.h"
+#include "xla/mlir_hlo/mhlo/transforms/transformation_helpers.h"
 #include "xla/permutation_util.h"
 #include "xla/primitive_util.h"
 #include "xla/service/algorithm_util.h"
@@ -585,6 +586,9 @@ absl::StatusOr<Value> EmitElementwise(ImplicitLocOpBuilder& b,
           Compare(b, {inputs[0], ZerosLike(b, inputs[0])},
                   mlir::mhlo::ComparisonDirection::NE),
           inputs[1], inputs[2]);
+    case HloOpcode::kReducePrecision:
+      return mlir::mhlo::reducePrecision<mt::BitcastOp>(
+          b.getLoc(), inputs[0], hlo.exponent_bits(), hlo.mantissa_bits(), &b);
     default:
       return absl::InvalidArgumentError(
           absl::StrCat("Unsupported elementwise operation ", hlo.ToString()));
@@ -2505,8 +2509,8 @@ Value EmitMaskOnInput(ImplicitLocOpBuilder& b,
   return if_op.getResult(0);
 }
 
-}  // namespace
-
+// Use tiling and execution parameters from 'config'. BlockLevelParameters are
+// ignored.
 // Variable naming: lhs [m, k] x rhs [k, n] -> out [m, n].
 absl::Status EmitMatMul(mlir::OpBuilder builder,
                         absl::string_view libdevice_path,
@@ -2837,6 +2841,8 @@ absl::StatusOr<Value> ComputeBasePtrOffset(
                                                     /*symbols=*/{}, b)[0]);
 }
 
+}  // namespace
+
 namespace ir_emitter_triton_internal {
 
 SmallVector<Value, 3> ComputeDelinearizedTileIndex(
@@ -2947,6 +2953,8 @@ absl::StatusOr<MakeTensorPtrOpAndBoundaryChecks> CreateMakeTensorPtrOp(
 
 }  // namespace ir_emitter_triton_internal
 
+namespace {
+// Generate Triton IR inside 'fn', using the given block_level_parameters.
 absl::Status EmitGeneric(mlir::OpBuilder builder,
                          absl::string_view libdevice_path,
                          const se::DeviceDescription& device_info,
@@ -3007,6 +3015,8 @@ absl::Status EmitGeneric(mlir::OpBuilder builder,
 
   return absl::OkStatus();
 }
+
+}  // namespace
 
 void LoadMlirDialectsForTriton(mlir::MLIRContext& mlir_context) {
   mlir_context
