@@ -595,6 +595,31 @@ ENTRY %elementwise {
   EXPECT_THAT(instruction, op::Sharding("{devices=[2,2]0,2,1,3}"));
 }
 
+TEST_F(AutoShardingTest, ConvolutionSplitDepthwiseTest) {
+  constexpr absl::string_view kHloString = R"(
+HloModule module
+ENTRY %elementwise {
+  %param0 = pred[512,1,1024,512]{3,2,1,0} parameter(0)
+  %param1 = f32[1,1,5,5]{3,2,1,0} parameter(1)
+  %convolution = f32[512,1,1024,512]{3,2,1,0} convolution(pred[512,1,1024,512]{3,2,1,0} %param0, f32[1,1,5,5]{3,2,1,0} %param1), window={size=5x5 pad=2_2x2_2}, dim_labels=bf01_oi01->bf01
+  ROOT %copy = f32[512,1,1024,512]{3,2,1,0} copy(%convolution)
+})";
+
+  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
+                          ParseAndReturnVerifiedModule(kHloString));
+  AutoShardingOption option;
+  option.enable = true;
+  option.device_mesh_shape = {512};
+  TF_ASSERT_OK_AND_ASSIGN(bool changed, AutoSharding(option).Run(module.get()));
+  VLOG(5) << module->ToString();
+  EXPECT_TRUE(changed);
+  const HloInstruction* convolution =
+      FindInstruction(module.get(), "convolution");
+  ASSERT_NE(convolution, nullptr);
+  ASSERT_TRUE(convolution->has_sharding());
+  EXPECT_EQ(convolution->sharding().NumTiles(), 512);
+}
+
 TEST_F(AutoShardingTest, NDIterativeSolveTest) {
   constexpr absl::string_view kHloString = R"(
 HloModule module
@@ -1005,8 +1030,11 @@ ENTRY main {
   all-reduce.1 = bf16[128,128]{1,0} all-reduce(custom-call.2), channel_id=621, replica_groups={{0,1,2,3},{4,5,6,7},{8,9,10,11},{12,13,14,15}}, use_global_device_ids=true, to_apply=add.6.clone, frontend_attributes={from-cross-replica-sharding="true"}, backend_config={"flag_configs":[],"barrier_config":{"barrier_type":"CUSTOM","id":"9"},"scoped_memory_configs":[],"compute_type":"COMPUTE_TYPE_DEFAULT","device_type":"DEVICE_TYPE_INVALID","used_scoped_memory_configs":[]}
   add.1 = bf16[128,128]{1,0} add(bf16[128,128]{1,0} all-reduce.1, bf16[128,128]{1,0} broadcast.1)
   custom-call.3 = bf16[512,512]{1,0} custom-call(add.1), custom_call_target="SPMDShardToFullShape", sharding={devices=[4,1,4]<=[16]last_tile_dim_replicate}
+  partition-id.1 = u32[] partition-id()
+  broadcast.3 = u32[512,512]{1,0} broadcast(partition-id.1)
+  custom-call.4 = u32[512,512]{1,0} custom-call(broadcast.3), custom_call_target="SPMDShardToFullShape", sharding={devices=[4,1,4]<=[16]last_tile_dim_replicate}
   add.2 = bf16[512,512]{1,0} add(bf16[512,512]{1,0} custom-call.3, bf16[512,512]{1,0} broadcast.2)
-  ROOT copy.1 = bf16[512,512]{1,0} copy(add.2)
+  ROOT tuple.1 = (bf16[512,512]{1,0}, u32[512,512]{1,0}) tuple(add.2, custom-call.4)
 })";
 
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<VerifiedHloModule> module,
