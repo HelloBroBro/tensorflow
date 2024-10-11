@@ -12,6 +12,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+
 #include "xla/stream_executor/rocm/rocm_executor.h"
 
 #include <unistd.h>
@@ -24,15 +25,11 @@ limitations under the License.
 #include <utility>
 #include <variant>
 
-#include "absl/base/casts.h"
-#include "absl/functional/any_invocable.h"
 #include "absl/numeric/int128.h"
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
-#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
-#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/synchronization/notification.h"
@@ -45,21 +42,17 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/dnn.h"
-#include "xla/stream_executor/event.h"
 #include "xla/stream_executor/event_based_timer.h"
 #include "xla/stream_executor/fft.h"
 #include "xla/stream_executor/gpu/context.h"
 #include "xla/stream_executor/gpu/gpu_command_buffer.h"
-#include "xla/stream_executor/gpu/gpu_diagnostics.h"
 #include "xla/stream_executor/gpu/gpu_driver.h"
-#include "xla/stream_executor/gpu/gpu_event.h"
 #include "xla/stream_executor/gpu/gpu_executor.h"
 #include "xla/stream_executor/gpu/gpu_kernel.h"
 #include "xla/stream_executor/gpu/gpu_stream.h"
 #include "xla/stream_executor/gpu/gpu_types.h"
 #include "xla/stream_executor/gpu/read_numa_node.h"
 #include "xla/stream_executor/gpu/scoped_activate_context.h"
-#include "xla/stream_executor/integrations/device_mem_allocator.h"
 #include "xla/stream_executor/kernel.h"
 #include "xla/stream_executor/kernel_spec.h"
 #include "xla/stream_executor/launch_dim.h"
@@ -67,7 +60,7 @@ limitations under the License.
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform/initialize.h"
 #include "xla/stream_executor/plugin_registry.h"
-#include "xla/stream_executor/rocm/rocm_diagnostics.h"
+#include "xla/stream_executor/rocm/rocm_context.h"
 #include "xla/stream_executor/rocm/rocm_driver_wrapper.h"
 #include "xla/stream_executor/rocm/rocm_event.h"
 #include "xla/stream_executor/rocm/rocm_kernel.h"
@@ -228,9 +221,7 @@ RocmExecutor::~RocmExecutor() {
   for (auto& it : in_memory_modules_) {
     UnloadRocmModule(gpu_context(), it.second);
   }
-  if (gpu_context() != nullptr) {
-    GpuDriver::DestroyContext(gpu_context());
-  }
+  set_context(nullptr);
   CHECK(kernel_to_gpu_binary_.empty()) << "GpuExecutor has live kernels.";
   CHECK(gpu_binary_to_module_.empty()) << "GpuExecutor has loaded modules.";
 }
@@ -347,10 +338,9 @@ absl::Status RocmExecutor::Init() {
 
   TF_RETURN_IF_ERROR(GpuDriver::GetDevice(device_ordinal(), &device_));
 
-  Context* context;
-  TF_RETURN_IF_ERROR(
-      GpuDriver::CreateContext(device_ordinal(), device_, &context));
-  set_context(context);
+  TF_ASSIGN_OR_RETURN(rocm_context_,
+                      RocmContext::Create(device_ordinal(), device_));
+  set_context(rocm_context_);
   return GpuDriver::GetGpuISAVersion(&version_, device_);
 }
 
@@ -601,7 +591,7 @@ absl::Status RocmExecutor::EnablePeerAccessTo(StreamExecutor* other) {
 }
 
 bool RocmExecutor::DeviceMemoryUsage(int64_t* free, int64_t* total) const {
-  return GpuDriver::GetDeviceMemoryInfo(gpu_context(), free, total);
+  return rocm_context_->GetDeviceMemoryUsage(free, total);
 }
 
 absl::StatusOr<DeviceMemoryBase> RocmExecutor::GetSymbol(
@@ -648,11 +638,12 @@ absl::Status FillBlockDimLimit(GpuDeviceHandle device,
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::unique_ptr<GpuEvent>> RocmExecutor::CreateGpuEvent(
+absl::StatusOr<std::unique_ptr<RocmEvent>> RocmExecutor::CreateGpuEvent(
     bool allow_timing) {
-  auto gpu_event = std::make_unique<RocmEvent>(gpu_context());
-  TF_RETURN_IF_ERROR(gpu_event->Init(allow_timing));
-  return std::move(gpu_event);
+  TF_ASSIGN_OR_RETURN(
+      auto event,
+      RocmEvent::Create(gpu_context(), /*allow_timing=*/allow_timing));
+  return std::make_unique<RocmEvent>(std::move(event));
 }
 
 absl::StatusOr<std::unique_ptr<Event>> RocmExecutor::CreateEvent() {
@@ -661,7 +652,8 @@ absl::StatusOr<std::unique_ptr<Event>> RocmExecutor::CreateEvent() {
 
 absl::StatusOr<std::unique_ptr<Stream>> RocmExecutor::CreateStream(
     std::optional<std::variant<StreamPriority, int>> priority) {
-  TF_ASSIGN_OR_RETURN(auto event, CreateGpuEvent(/*allow_timing=*/false));
+  TF_ASSIGN_OR_RETURN(auto event,
+                      RocmEvent::Create(gpu_context(), /*allow_timing=*/false));
   TF_ASSIGN_OR_RETURN(auto stream,
                       RocmStream::Create(this, std::move(event), priority));
   absl::MutexLock l(&alive_gpu_streams_mu_);
@@ -745,7 +737,7 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
   }
 
   uint64_t device_memory_size = -1;
-  (void)GpuDriver::GetDeviceTotalMemory(device, &device_memory_size);
+  (void)RocmContext::GetDeviceTotalMemory(device, &device_memory_size);
   desc.set_device_memory_size(device_memory_size);
 
   {
