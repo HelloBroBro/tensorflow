@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef XLA_STREAM_EXECUTOR_ROCM_ROCM_STREAM_H_
 #define XLA_STREAM_EXECUTOR_ROCM_ROCM_STREAM_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -24,6 +25,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "rocm/include/hip/hip_runtime.h"
+#include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/event.h"
 #include "xla/stream_executor/gpu/gpu_executor.h"
 #include "xla/stream_executor/gpu/gpu_stream.h"
@@ -40,8 +42,18 @@ class RocmStream : public GpuStream {
   absl::Status RecordEvent(Event* event) override;
   absl::Status WaitFor(Event* event) override;
 
+  absl::Status Memset32(DeviceMemoryBase* location, uint32_t pattern,
+                        uint64_t size) override;
+  absl::Status MemZero(DeviceMemoryBase* location, uint64_t size) override;
+  absl::Status Memcpy(DeviceMemoryBase* gpu_dst, const void* host_src,
+                      uint64_t size) override;
+  absl::Status Memcpy(void* host_dst, const DeviceMemoryBase& gpu_src,
+                      uint64_t size) override;
+  absl::Status Memcpy(DeviceMemoryBase* gpu_dst,
+                      const DeviceMemoryBase& gpu_src, uint64_t size) override;
+
   static absl::StatusOr<std::unique_ptr<RocmStream>> Create(
-      GpuExecutor* executor, RocmEvent completed_event,
+      GpuExecutor* executor,
       std::optional<std::variant<StreamPriority, int>> priority);
 
   ~RocmStream() override;
