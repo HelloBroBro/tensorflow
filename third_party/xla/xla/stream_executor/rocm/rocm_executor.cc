@@ -37,6 +37,7 @@ limitations under the License.
 #include "absl/synchronization/mutex.h"
 #include "absl/synchronization/notification.h"
 #include "absl/types/span.h"
+#include "rocm/include/hip/driver_types.h"
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/hip/hip_version.h"
 #include "rocm/rocm_config.h"
@@ -76,6 +77,7 @@ limitations under the License.
 #include "xla/stream_executor/semantic_version.h"
 #include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
+#include "tsl/platform/casts.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/errors.h"
 #include "tsl/platform/fingerprint.h"
@@ -322,6 +324,104 @@ absl::Status GetGridLimits(int* x, int* y, int* z, hipDevice_t device) {
   return absl::OkStatus();
 }
 
+// Returns the device associated with the given device_ordinal.
+absl::StatusOr<hipDevice_t> GetDevice(int device_ordinal) {
+  hipDevice_t device;
+  hipError_t res = wrap::hipDeviceGet(&device, device_ordinal);
+  if (res == hipSuccess) {
+    return device;
+  }
+
+  return absl::InternalError(
+      absl::StrCat("failed call to hipDeviceGet: ", ToString(res)));
+}
+
+// Returns the device associated with the given context.
+absl::StatusOr<hipDevice_t> DeviceFromContext(Context* context) {
+  ScopedActivateContext activated{context};
+  hipDevice_t device = -1;
+  hipError_t result = wrap::hipCtxGetDevice(&device);
+  if (result == hipSuccess) return device;
+
+  return absl::InternalError(
+      absl::StrCat("failed to get device for context: ", ToString(result)));
+}
+
+bool CanEnablePeerAccess(hipDevice_t from, hipDevice_t to) {
+  int can_access_peer = -1;
+  hipError_t result = wrap::hipDeviceCanAccessPeer(&can_access_peer, from, to);
+  if (result != hipSuccess) {
+    LOG(ERROR) << "failed to detect peer access capability: "
+               << ToString(result);
+    return false;
+  }
+  return can_access_peer;
+}
+
+bool CanEnablePeerAccess(Context* from, Context* to) {
+  // A context can always access its own memory.
+  if (from == to) return true;
+
+  auto from_device = DeviceFromContext(from);
+  if (!from_device.ok()) {
+    LOG(ERROR) << "failed to resolve 'from' peer access context to a device: "
+               << from_device.status();
+    return false;
+  }
+
+  auto to_device = DeviceFromContext(to);
+  if (!to_device.ok()) {
+    LOG(ERROR) << "failed to resolve 'to' peer access context to a device: "
+               << to_device.status();
+    return false;
+  }
+  return CanEnablePeerAccess(from_device.value(), to_device.value());
+}
+
+absl::Status EnablePeerAccess(Context* from, Context* to) {
+  if (from == to) {
+    return absl::OkStatus();  // A device can always access its own memory.
+  }
+
+  ScopedActivateContext activated{from};
+  hipError_t result = wrap::hipCtxEnablePeerAccess(
+      tensorflow::down_cast<RocmContext*>(to)->context(), 0 /* = flags */);
+  if (result != hipSuccess && result != hipErrorPeerAccessAlreadyEnabled) {
+    return absl::InternalError(
+        absl::StrFormat("failed to enable peer access from %d to %d: %s",
+                        from->device_ordinal(), to->device_ordinal(),
+                        ToString(result).c_str()));
+  }
+
+  return absl::OkStatus();
+}
+
+std::string GetPCIBusID(hipDevice_t device) {
+  std::string pci_bus_id;
+  static const int kBufferSize = 64;
+  absl::InlinedVector<char, 4> chars(kBufferSize);
+  chars[kBufferSize - 1] = '\0';
+  hipError_t res =
+      wrap::hipDeviceGetPCIBusId(chars.begin(), kBufferSize - 1, device);
+  if (res != hipSuccess) {
+    LOG(ERROR) << "failed to query PCI bus id for device: " << ToString(res);
+    return pci_bus_id;
+  }
+  pci_bus_id = chars.begin();
+  return pci_bus_id;
+}
+
+bool GetDeviceProperties(hipDeviceProp_t* device_properties,
+                         int device_ordinal) {
+  hipError_t res =
+      wrap::hipGetDeviceProperties(device_properties, device_ordinal);
+  if (res != hipSuccess) {
+    LOG(ERROR) << "failed to query device properties: " << ToString(res);
+    return false;
+  }
+
+  return true;
+}
 }  // namespace
 
 RocmExecutor::~RocmExecutor() {
@@ -443,7 +543,7 @@ void RocmExecutor::UnloadKernel(const Kernel* kernel) {
 absl::Status RocmExecutor::Init() {
   TF_RETURN_IF_ERROR(GpuDriver::Init());
 
-  TF_RETURN_IF_ERROR(GpuDriver::GetDevice(device_ordinal(), &device_));
+  TF_ASSIGN_OR_RETURN(device_, GetDevice(device_ordinal()));
 
   TF_ASSIGN_OR_RETURN(rocm_context_,
                       RocmContext::Create(device_ordinal(), device_));
@@ -689,13 +789,12 @@ fft::FftSupport* RocmExecutor::AsFft() {
 
 bool RocmExecutor::CanEnablePeerAccessTo(StreamExecutor* other) {
   GpuExecutor* rocm_other = static_cast<GpuExecutor*>(other);
-  return GpuDriver::CanEnablePeerAccess(gpu_context(),
-                                        rocm_other->gpu_context());
+  return CanEnablePeerAccess(gpu_context(), rocm_other->gpu_context());
 }
 
 absl::Status RocmExecutor::EnablePeerAccessTo(StreamExecutor* other) {
   GpuExecutor* rocm_other = static_cast<GpuExecutor*>(other);
-  return GpuDriver::EnablePeerAccess(gpu_context(), rocm_other->gpu_context());
+  return EnablePeerAccess(gpu_context(), rocm_other->gpu_context());
 }
 
 bool RocmExecutor::DeviceMemoryUsage(int64_t* free, int64_t* total) const {
@@ -731,8 +830,7 @@ absl::StatusOr<DeviceMemoryBase> RocmExecutor::GetSymbol(
                    reinterpret_cast<uintptr_t>(module_handle.id()), ")"));
 }
 
-absl::Status FillBlockDimLimit(GpuDeviceHandle device,
-                               BlockDim* block_dim_limit) {
+absl::Status FillBlockDimLimit(hipDevice_t device, BlockDim* block_dim_limit) {
   // The BlockDim name is a mismatch against these GRID_DIM_* queries because
   // we use BlockDims to express the dimensions of blocks within a grid
   // (as opposed to ThreadDim which expresses the dimensions of threads
@@ -770,23 +868,20 @@ RocmExecutor::CreateCommandBuffer(CommandBuffer::Mode mode) {
 }
 
 absl::Status RocmExecutor::TrimGraphMemory() {
-  return GpuDriver::DeviceGraphMemTrim(device_);
+  return ToStatus(wrap::hipDeviceGraphMemTrim(device_),
+                  "Failed to trim device graph memory");
 }
 
 absl::StatusOr<std::unique_ptr<DeviceDescription>>
 RocmExecutor::CreateDeviceDescription(int device_ordinal) {
-  GpuDeviceHandle device;
-  auto status = GpuDriver::GetDevice(device_ordinal, &device);
-  if (!status.ok()) {
-    return status;
-  }
+  TF_ASSIGN_OR_RETURN(hipDevice_t device, GetDevice(device_ordinal));
 
   TF_ASSIGN_OR_RETURN(std::string gcn_arch_name, GetGpuGCNArchName(device));
 
   DeviceDescription desc;
 
   {
-    std::string pci_bus_id = GpuDriver::GetPCIBusID(device);
+    std::string pci_bus_id = GetPCIBusID(device);
 
     // Lower the hex characters to match sysfs.
     pci_bus_id = absl::AsciiStrToLower(pci_bus_id);
@@ -798,7 +893,7 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
   }
 
   hipDeviceProp_t prop;
-  if (GpuDriver::GetDeviceProperties(&prop, device_ordinal)) {
+  if (GetDeviceProperties(&prop, device_ordinal)) {
     desc.set_threads_per_block_limit(prop.maxThreadsPerBlock);
 
     ThreadDim thread_dim_limit;
@@ -819,11 +914,8 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
     desc.set_l2_cache_size(prop.l2CacheSize);
   }
 
-  {
-    bool ecc_enabled = false;
-    (void)GpuDriver::IsEccEnabled(device, &ecc_enabled);
-    desc.set_ecc_enabled(ecc_enabled);
-  }
+  // No way to query ECC status from the API.
+  desc.set_ecc_enabled(false);
 
   uint64_t device_memory_size = -1;
   (void)RocmContext::GetDeviceTotalMemory(device, &device_memory_size);
@@ -882,6 +974,29 @@ RocmExecutor::CreateDeviceDescription(int device_ordinal) {
       absl::StrFormat("%dB RAM, %d cores", device_memory_size, core_count));
 
   return std::make_unique<DeviceDescription>(std::move(desc));
+}
+
+absl::StatusOr<MemoryType> RocmExecutor::GetPointerMemorySpace(
+    const void* ptr) {
+  hipDeviceptr_t pointer =
+      reinterpret_cast<hipDeviceptr_t>(const_cast<void*>(ptr));
+  unsigned int value;
+  hipError_t result = wrap::hipPointerGetAttribute(
+      &value, HIP_POINTER_ATTRIBUTE_MEMORY_TYPE, pointer);
+  if (result == hipSuccess) {
+    switch (value) {
+      case hipMemoryTypeDevice:
+        return MemoryType::kDevice;
+      case hipMemoryTypeHost:
+        return MemoryType::kHost;
+      default:
+        return absl::InternalError(
+            absl::StrCat("unknown memory space provided by ROCM API: ", value));
+    }
+  }
+
+  return absl::InternalError(absl::StrCat(
+      "failed to query device pointer for memory space: ", ToString(result)));
 }
 
 }  // namespace gpu
