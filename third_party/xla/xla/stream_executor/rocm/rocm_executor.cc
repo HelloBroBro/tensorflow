@@ -26,6 +26,7 @@ limitations under the License.
 #include <variant>
 #include <vector>
 
+#include "absl/base/casts.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/numeric/int128.h"
 #include "absl/status/status.h"
@@ -57,9 +58,11 @@ limitations under the License.
 #include "xla/stream_executor/gpu/gpu_types.h"
 #include "xla/stream_executor/gpu/read_numa_node.h"
 #include "xla/stream_executor/gpu/scoped_activate_context.h"
+#include "xla/stream_executor/host_memory_allocation.h"
 #include "xla/stream_executor/kernel.h"
 #include "xla/stream_executor/kernel_spec.h"
 #include "xla/stream_executor/launch_dim.h"
+#include "xla/stream_executor/memory_allocation.h"
 #include "xla/stream_executor/module_spec.h"
 #include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/platform/initialize.h"
@@ -82,6 +85,7 @@ limitations under the License.
 #include "tsl/platform/errors.h"
 #include "tsl/platform/fingerprint.h"
 #include "tsl/platform/logging.h"
+#include "tsl/platform/numbers.h"
 #include "tsl/platform/statusor.h"
 #include "tsl/platform/threadpool.h"
 
@@ -422,6 +426,58 @@ bool GetDeviceProperties(hipDeviceProp_t* device_properties,
 
   return true;
 }
+
+// Allocates memory on the GPU device.
+void* DeviceAllocate(Context* context, uint64_t bytes) {
+  if (bytes == 0) {
+    return nullptr;
+  }
+
+  ScopedActivateContext activated{context};
+  hipDeviceptr_t result = 0;
+  hipError_t res = wrap::hipMalloc(&result, bytes);
+  if (res != hipSuccess) {
+    // LOG(INFO) because this isn't always important to users (e.g. BFCAllocator
+    // implements a retry if the first allocation fails).
+    LOG(INFO) << "failed to allocate "
+              << tsl::strings::HumanReadableNumBytes(bytes) << " (" << bytes
+              << " bytes) from device: " << ToString(res);
+    return nullptr;
+  }
+  void* ptr = reinterpret_cast<void*>(result);
+  VLOG(2) << "allocated " << ptr << " for device " << context->device_ordinal()
+          << " of " << bytes << " bytes";
+  return ptr;
+}
+
+// Deallocates memory on the GPU device that was previously allocated via
+// DeviceAllocate.
+void DeviceDeallocate(Context* context, void* location) {
+  ScopedActivateContext activation{context};
+  hipDeviceptr_t pointer = absl::bit_cast<hipDeviceptr_t>(location);
+  hipError_t res = wrap::hipFree(pointer);
+  if (res != hipSuccess) {
+    LOG(ERROR) << "failed to free device memory at " << location
+               << "; result: " << ToString(res);
+  } else {
+    VLOG(2) << "deallocated " << location << " for device "
+            << context->device_ordinal();
+  }
+}
+
+// Allocates memory on the host.
+void* HostAllocate(Context* context, uint64_t bytes) {
+  ScopedActivateContext activation{context};
+  void* host_mem = nullptr;
+  // "Portable" memory is visible to all ROCM contexts. Safe for our use model.
+  hipError_t res = wrap::hipHostMalloc(&host_mem, bytes, hipHostMallocPortable);
+  if (res != hipSuccess) {
+    LOG(ERROR) << "failed to alloc " << bytes
+               << " bytes on host: " << ToString(res);
+  }
+  return host_mem;
+}
+
 }  // namespace
 
 RocmExecutor::~RocmExecutor() {
@@ -579,7 +635,7 @@ absl::StatusOr<std::unique_ptr<Kernel>> RocmExecutor::LoadKernel(
 
 #if TF_ROCM_VERSION >= 60200
     TF_ASSIGN_OR_RETURN(
-        GpuFunctionHandle function,
+        hipFunction_t function,
         RocmRuntime::GetFuncBySymbol(spec.in_process_symbol().symbol()));
     rocm_kernel->set_gpu_function(function);
 #else
@@ -595,7 +651,7 @@ absl::StatusOr<std::unique_ptr<Kernel>> RocmExecutor::LoadKernel(
   // from a module, as ROCm runtime did that automatically for us.
   if (!spec.has_in_process_symbol()) {
     VLOG(2) << "getting function " << *kernel_name << " from module " << module;
-    GpuFunctionHandle function;
+    hipFunction_t function;
     TF_RETURN_IF_ERROR(GetModuleFunction(gpu_context(), module,
                                          kernel_name->c_str(), &function));
     rocm_kernel->set_gpu_function(function);
@@ -671,14 +727,61 @@ absl::Status RocmExecutor::LoadModuleFromHsaco(const char* hsaco,
 DeviceMemoryBase RocmExecutor::Allocate(uint64_t size, int64_t memory_space) {
   if (memory_space ==
       static_cast<int64_t>(stream_executor::MemoryType::kHost)) {
-    return DeviceMemoryBase(GpuDriver::HostAllocate(gpu_context(), size), size);
+    return DeviceMemoryBase(HostAllocate(gpu_context(), size), size);
   }
   CHECK_EQ(memory_space, 0);
-  return DeviceMemoryBase(GpuDriver::DeviceAllocate(gpu_context(), size), size);
+  return DeviceMemoryBase(DeviceAllocate(gpu_context(), size), size);
+}
+absl::StatusOr<std::unique_ptr<MemoryAllocation>>
+RocmExecutor::HostMemoryAllocate(uint64_t size) {
+  auto* buffer = HostAllocate(gpu_context(), size);
+  if (buffer == nullptr && size > 0) {
+    return absl::InternalError(
+        absl::StrFormat("Failed to allocate HostMemory of size %d", size));
+  }
+  return std::make_unique<HostMemoryAllocation>(buffer, size, this);
+}
+
+void RocmExecutor::HostMemoryDeallocate(void* location) {
+  ScopedActivateContext activation{gpu_context()};
+  hipError_t res = wrap::hipHostFree(location);
+  if (res != hipSuccess) {
+    LOG(ERROR) << "error deallocating host memory at " << location << ": "
+               << ToString(res);
+  }
 }
 
 void RocmExecutor::Deallocate(DeviceMemoryBase* mem) {
-  GpuDriver::DeviceDeallocate(gpu_context(), mem->opaque());
+  DeviceDeallocate(gpu_context(), mem->opaque());
+}
+
+void* RocmExecutor::UnifiedMemoryAllocate(uint64_t size) {
+  ScopedActivateContext activated{gpu_context()};
+  hipDeviceptr_t result = 0;
+  // "managed" memory is visible to both CPU and GPU.
+  hipError_t res = wrap::hipMallocManaged(&result, size, hipMemAttachGlobal);
+  if (res != hipSuccess) {
+    LOG(ERROR) << "failed to alloc " << size
+               << " bytes unified memory; result: " << ToString(res);
+    return nullptr;
+  }
+  void* ptr = reinterpret_cast<void*>(result);
+  VLOG(2) << "allocated " << ptr << " for context " << gpu_context() << " of "
+          << size << " bytes in unified memory";
+  return ptr;
+}
+
+void RocmExecutor::UnifiedMemoryDeallocate(void* location) {
+  ScopedActivateContext activation(gpu_context());
+  hipDeviceptr_t pointer = absl::bit_cast<hipDeviceptr_t>(location);
+  hipError_t res = wrap::hipFree(pointer);
+  if (res != hipSuccess) {
+    LOG(ERROR) << "failed to free unified memory at " << location
+               << "; result: " << ToString(res);
+  } else {
+    VLOG(2) << "deallocated unified memory at " << location << " for context "
+            << gpu_context();
+  }
 }
 
 bool RocmExecutor::SynchronizeAllActivity() {
@@ -687,27 +790,45 @@ bool RocmExecutor::SynchronizeAllActivity() {
 
 absl::Status RocmExecutor::SynchronousMemZero(DeviceMemoryBase* location,
                                               uint64_t size) {
-  if (reinterpret_cast<uintptr_t>(location->opaque()) % 4 == 0 &&
-      size % 4 == 0) {
-    return GpuDriver::SynchronousMemsetUint32(
-        gpu_context(), AsROCmDevicePtr(location), 0x0, size / 4);
+  ScopedActivateContext activation{gpu_context()};
+  hipDeviceptr_t rocm_location = AsROCmDevicePtr(location);
+  if (reinterpret_cast<uintptr_t>(location->opaque()) % sizeof(uint32_t) == 0 &&
+      size % sizeof(uint32_t) == 0) {
+    return ToStatus(
+        wrap::hipMemsetD32(rocm_location, 0x0, size / sizeof(uint32_t)),
+        "Failed to memset memory");
   }
-  return GpuDriver::SynchronousMemsetUint8(
-      gpu_context(), AsROCmDevicePtr(location), 0x0, size);
+  return ToStatus(wrap::hipMemsetD8(rocm_location, 0x0, size),
+                  "Failed to memset memory");
 }
 
 absl::Status RocmExecutor::SynchronousMemcpy(DeviceMemoryBase* gpu_dst,
                                              const void* host_src,
                                              uint64_t size) {
-  return GpuDriver::SynchronousMemcpyH2D(
-      gpu_context(), AsROCmDevicePtr(gpu_dst), host_src, size);
+  ScopedActivateContext activation(gpu_context());
+  TF_RETURN_IF_ERROR(ToStatus(
+      wrap::hipMemcpyHtoD(AsROCmDevicePtr(gpu_dst), const_cast<void*>(host_src),
+                          size),
+      absl::StrFormat(
+          "failed to synchronous memcpy from host to device: Gpu dst: %p;"
+          " host src: %p; size: %llu=0x%llx",
+          AsROCmDevicePtr(gpu_dst), host_src, size, size)));
+  VLOG(2) << "successfully sync memcpy'd h2d of " << size << " bytes";
+  return absl::OkStatus();
 }
 
 absl::Status RocmExecutor::SynchronousMemcpy(void* host_dst,
                                              const DeviceMemoryBase& gpu_src,
                                              uint64_t size) {
-  return GpuDriver::SynchronousMemcpyD2H(gpu_context(), host_dst,
-                                         AsROCmDevicePtr(gpu_src), size);
+  ScopedActivateContext activation{gpu_context()};
+  TF_RETURN_IF_ERROR(ToStatus(
+      wrap::hipMemcpyDtoH(host_dst, AsROCmDevicePtr(gpu_src), size),
+      absl::StrFormat("failed to synchronous memcpy from device to host: "
+                      "host dst: %p; Gpu src: %p; size: %llu=0x%llx",
+                      host_dst, AsROCmDevicePtr(gpu_src), size, size)));
+  VLOG(2) << "successfully sync memcpy'd d2h of " << size << " bytes to "
+          << host_dst;
+  return absl::OkStatus();
 }
 
 void RocmExecutor::DeallocateStream(Stream* stream) {
