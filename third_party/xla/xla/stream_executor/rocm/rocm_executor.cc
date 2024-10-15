@@ -42,6 +42,7 @@ limitations under the License.
 #include "rocm/include/hip/hip_runtime.h"
 #include "rocm/include/hip/hip_version.h"
 #include "rocm/rocm_config.h"
+#include "xla/stream_executor/activate_context.h"
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/command_buffer.h"
 #include "xla/stream_executor/device_description.h"
@@ -164,9 +165,7 @@ absl::Status LoadHsaco(Context* context, const char* hsaco_contents,
   GetDriverExecutor()->Schedule(
       [context, hsaco_contents, module, &returned_status, &notification]() {
         ScopedActivateContext activation{context};
-        void* hsaco_data = const_cast<char*>(hsaco_contents);
-
-        hipError_t res = wrap::hipModuleLoadData(module, hsaco_data);
+        hipError_t res = wrap::hipModuleLoadData(module, hsaco_contents);
 
         if (res != hipSuccess) {
           returned_status = absl::InternalError(
@@ -481,9 +480,6 @@ void* HostAllocate(Context* context, uint64_t bytes) {
 }  // namespace
 
 RocmExecutor::~RocmExecutor() {
-  for (auto& it : disk_modules_) {
-    UnloadRocmModule(gpu_context(), it.second);
-  }
   for (auto& it : in_memory_modules_) {
     UnloadRocmModule(gpu_context(), it.second);
   }
@@ -492,10 +488,36 @@ RocmExecutor::~RocmExecutor() {
   CHECK(gpu_binary_to_module_.empty()) << "GpuExecutor has loaded modules.";
 }
 
+std::unique_ptr<ActivateContext> RocmExecutor::Activate() {
+  return std::make_unique<ScopedActivateContext>(gpu_context());
+}
+
 bool RocmExecutor::UnloadModule(ModuleHandle module_handle) {
   const char* gpu_binary = reinterpret_cast<const char*>(module_handle.id());
   absl::MutexLock lock{&in_memory_modules_mu_};
   return UnloadGpuBinary(gpu_binary);
+}
+
+absl::StatusOr<DeviceMemoryBase> RocmExecutor::GetMemoryRange(
+    const DeviceMemoryBase& location) {
+  hipDeviceptr_t device_pointer;
+  size_t size;
+  hipError_t result = wrap::hipMemGetAddressRange(
+      &device_pointer, &size, const_cast<void*>(location.opaque()));
+  if (result == hipSuccess) {
+    return DeviceMemoryBase(device_pointer, size);
+  } else if (result == hipErrorNotFound) {
+    // We differentiate between "this pointer is unknown" (return here) and
+    // "there was an internal error while performing this operation" (return
+    // below).
+    return absl::NotFoundError(absl::StrFormat("not a device pointer %p; %s",
+                                               location.opaque(),
+                                               ToString(result).c_str()));
+  }
+
+  return absl::InternalError(
+      absl::StrFormat("failed to get pointer into for device pointer %p; %s",
+                      location.opaque(), ToString(result).c_str()));
 }
 
 absl::StatusOr<std::shared_ptr<DeviceMemoryBase>>
@@ -597,8 +619,6 @@ void RocmExecutor::UnloadKernel(const Kernel* kernel) {
 }
 
 absl::Status RocmExecutor::Init() {
-  TF_RETURN_IF_ERROR(GpuDriver::Init());
-
   TF_ASSIGN_OR_RETURN(device_, GetDevice(device_ordinal()));
 
   TF_ASSIGN_OR_RETURN(rocm_context_,
@@ -838,9 +858,9 @@ void RocmExecutor::DeallocateStream(Stream* stream) {
       dnn_->NotifyStreamDestroyed(stream);
     }
   }
-  GpuStream* rocm_stream = AsGpuStream(stream);
+  RocmStream* rocm_stream = static_cast<RocmStream*>(stream);
   absl::MutexLock l(&alive_gpu_streams_mu_);
-  alive_gpu_streams_.erase(rocm_stream->gpu_stream());
+  alive_gpu_streams_.erase(rocm_stream->stream_handle());
 }
 
 absl::Status RocmExecutor::BlockHostUntilDone(Stream* stream) {
@@ -975,8 +995,7 @@ absl::StatusOr<std::unique_ptr<Stream>> RocmExecutor::CreateStream(
     std::optional<std::variant<StreamPriority, int>> priority) {
   TF_ASSIGN_OR_RETURN(auto stream, RocmStream::Create(this, priority));
   absl::MutexLock l(&alive_gpu_streams_mu_);
-  auto gpu_stream = stream->gpu_stream();
-  alive_gpu_streams_[gpu_stream] = stream.get();
+  alive_gpu_streams_[stream->stream_handle()] = stream.get();
   return std::move(stream);
 }
 
