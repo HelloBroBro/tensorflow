@@ -19,13 +19,14 @@
 
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
-#include "third_party/qairt/include/QNN/HTP/QnnHtpDevice.h"
-#include "third_party/qairt/include/QNN/QnnBackend.h"
-#include "third_party/qairt/include/QNN/QnnCommon.h"
-#include "third_party/qairt/include/QNN/QnnInterface.h"
-#include "third_party/qairt/include/QNN/System/QnnSystemInterface.h"
+#include "third_party/qairt/latest/include/QNN/HTP/QnnHtpDevice.h"
+#include "third_party/qairt/latest/include/QNN/QnnBackend.h"
+#include "third_party/qairt/latest/include/QNN/QnnCommon.h"
+#include "third_party/qairt/latest/include/QNN/QnnInterface.h"
+#include "third_party/qairt/latest/include/QNN/System/QnnSystemInterface.h"
 #include "tensorflow/lite/experimental/lrt/c/lite_rt_common.h"
 #include "tensorflow/lite/experimental/lrt/vendors/qualcomm/common.h"
+#include "tensorflow/lite/experimental/lrt/vendors/qualcomm/qnn_log.h"
 
 //===----------------------------------------------------------------------===//
 //
@@ -48,7 +49,17 @@
 
 namespace lrt::qnn {
 
+class QnnManager;
+
+namespace internal {
+
+void Dump(const QnnManager& qnn, std::ostream& out);
+
+}  // namespace internal
+
 class QnnManager {
+  friend void internal::Dump(const QnnManager& qnn, std::ostream& out);
+
  public:
   QnnManager() = default;
   ~QnnManager() = default;

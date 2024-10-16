@@ -319,13 +319,35 @@ cc_library(
 )
 
 td_library(
-    name = "xla_triton_ops_td_files",
-    srcs = ["xla_triton_ops.td"],
+    name = "xla_triton_td_files",
+    srcs = glob(["*.td"]),
     includes = ["."],
     deps = [
         "@llvm-project//mlir:OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectInterfacesTdFiles",
     ],
+)
+
+gentbl_cc_library(
+    name = "xla_triton_dialect_inc_gen",
+    strip_include_prefix = ".",
+    tbl_outs = [
+        (
+            [
+                "-gen-dialect-decls",
+            ],
+            "xla_triton_dialect.h.inc",
+        ),
+        (
+            [
+                "-gen-dialect-defs",
+            ],
+            "xla_triton_dialect.cc.inc",
+        ),
+    ],
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "xla_triton_dialect.td",
+    deps = [":xla_triton_td_files"],
 )
 
 gentbl_cc_library(
@@ -335,35 +357,20 @@ gentbl_cc_library(
         (
             [
                 "-gen-op-decls",
-                "-dialect=triton_xla",
             ],
             "xla_triton_ops.h.inc",
         ),
         (
             [
                 "-gen-op-defs",
-                "-dialect=triton_xla",
             ],
             "xla_triton_ops.cc.inc",
-        ),
-        (
-            [
-                "-gen-dialect-decls",
-                "-dialect=triton_xla",
-            ],
-            "xla_triton_dialect.h.inc",
-        ),
-        (
-            [
-                "-gen-dialect-defs",
-                "-dialect=triton_xla",
-            ],
-            "xla_triton_dialect.cc.inc",
         ),
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "xla_triton_ops.td",
     deps = [
+        ":xla_triton_td_files",
         "@llvm-project//mlir:InferTypeOpInterfaceTdFiles",
         "@llvm-project//mlir:OpBaseTdFiles",
         "@llvm-project//mlir:SideEffectInterfacesTdFiles",
@@ -372,10 +379,11 @@ gentbl_cc_library(
 )
 
 cc_library(
-    name = "xla_triton_ops",
+    name = "xla_triton",
     srcs = ["xla_triton_ops.cc"],
     hdrs = ["xla_triton_ops.h"],
     deps = [
+        ":xla_triton_dialect_inc_gen",
         ":xla_triton_ops_inc_gen",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:BytecodeOpInterface",
@@ -393,9 +401,11 @@ cc_library(
 xla_test(
     name = "triton_fusion_emitter_device_legacy_test",
     srcs = if_gpu_is_configured(["triton_fusion_emitter_device_legacy_test.cc"]),
+    # TODO(b/372714955): Fix the memory leak!
     backend_args = if_google(
         {
             "gpu_h100": ["--heap_check="],
+            "gpu_a100": ["--heap_check="],
         },
         {},
     ),
