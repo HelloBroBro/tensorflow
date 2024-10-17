@@ -31,7 +31,6 @@ limitations under the License.
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/event.h"
 #include "xla/stream_executor/event_based_timer.h"
-#include "xla/stream_executor/gpu/gpu_executor.h"
 #include "xla/stream_executor/gpu/gpu_stream.h"
 #include "xla/stream_executor/kernel.h"
 #include "xla/stream_executor/launch_dim.h"
@@ -58,6 +57,7 @@ class CudaStream : public GpuStream {
                       const DeviceMemoryBase& gpu_src, uint64_t size) override;
   absl::Status DoHostCallbackWithStatus(
       absl::AnyInvocable<absl::Status() &&> callback) override;
+  absl::Status BlockHostUntilDone() override;
 
   void SetName(std::string name) override;
 
@@ -71,7 +71,7 @@ class CudaStream : public GpuStream {
   }
 
   static absl::StatusOr<std::unique_ptr<CudaStream>> Create(
-      GpuExecutor* executor,
+      StreamExecutor* executor,
       std::optional<std::variant<StreamPriority, int>> priority);
 
   ~CudaStream() override;
@@ -79,7 +79,7 @@ class CudaStream : public GpuStream {
   CUstream stream_handle() const { return stream_handle_; }
 
  private:
-  CudaStream(GpuExecutor* executor, CudaEvent completed_event,
+  CudaStream(StreamExecutor* executor, CudaEvent completed_event,
              std::optional<std::variant<StreamPriority, int>> priority,
              CUstream stream_handle)
       : GpuStream(executor, priority),
@@ -93,7 +93,7 @@ class CudaStream : public GpuStream {
                       const std::optional<ClusterDim>& cluster_dims,
                       const Kernel& kernel, const KernelArgs& args) override;
 
-  GpuExecutor* executor_;
+  StreamExecutor* executor_;
   CudaEvent completed_event_;
   CUstream stream_handle_;
 };
