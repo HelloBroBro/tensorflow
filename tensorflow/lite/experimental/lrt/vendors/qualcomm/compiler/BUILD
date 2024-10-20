@@ -81,12 +81,48 @@ litert_lib(
         "nobuilder",
     ],
     deps = [
+        ":graph_mapper",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/types:span",
         # copybara:uncomment "//third_party/qairt/latest:qnn_lib_headers",
         "//tensorflow/lite/experimental/lrt/c:litert_c_api",
         "//tensorflow/lite/experimental/lrt/cc:litert_cc_api",
+        "//tensorflow/lite/experimental/lrt/cc:litert_op",
+        "//tensorflow/lite/experimental/lrt/cc:litert_tensor",
         "//tensorflow/lite/experimental/lrt/core:graph_tools",
+        "//tensorflow/lite/experimental/lrt/core:logging",
+        "//tensorflow/lite/experimental/lrt/vendors/qualcomm:common",
+        "//tensorflow/lite/experimental/lrt/vendors/qualcomm:qnn_manager",
+        "//tensorflow/lite/experimental/lrt/vendors/qualcomm/compiler/IR:qnn_op",
+        "//tensorflow/lite/experimental/lrt/vendors/qualcomm/compiler/IR:qnn_tensor",
+        "//tensorflow/lite/experimental/lrt/vendors/qualcomm/compiler/legalizations:legalization",
+        "//tensorflow/lite/experimental/lrt/vendors/qualcomm/compiler/legalizations:mul_op_legalization",
+    ],
+)
+
+litert_lib(
+    name = "graph_mapper",
+    srcs = [
+        "graph_mapper.cc",
+    ],
+    hdrs = ["graph_mapper.h"],
+    tags = [
+        # Don't build/test in OS until qnn is available.
+        "nobuilder",
+    ],
+    visibility = ["//tensorflow/lite/experimental/lrt:__subpackages__"],
+    deps = [
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        # copybara:uncomment "//third_party/qairt/latest:qnn_lib_headers",
+        "//tensorflow/lite/experimental/lrt/c:litert_c_api",
+        "//tensorflow/lite/experimental/lrt/cc:litert_cc_api",
+        "//tensorflow/lite/experimental/lrt/cc:litert_op",
+        "//tensorflow/lite/experimental/lrt/cc:litert_tensor",
+        "//tensorflow/lite/experimental/lrt/core:graph_tools",
+        "//tensorflow/lite/experimental/lrt/core:logging",
+        "//tensorflow/lite/experimental/lrt/vendors/qualcomm:common",
         "//tensorflow/lite/experimental/lrt/vendors/qualcomm:qnn_manager",
         "//tensorflow/lite/experimental/lrt/vendors/qualcomm/compiler/IR:qnn_op",
         "//tensorflow/lite/experimental/lrt/vendors/qualcomm/compiler/IR:qnn_tensor",
