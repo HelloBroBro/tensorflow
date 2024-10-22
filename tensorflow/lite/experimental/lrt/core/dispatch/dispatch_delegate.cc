@@ -26,9 +26,9 @@
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/delegates/utils/simple_opaque_delegate.h"
 #include "tensorflow/lite/experimental/lrt/c/litert_dispatch_delegate.h"
+#include "tensorflow/lite/experimental/lrt/c/litert_logging.h"
 #include "tensorflow/lite/experimental/lrt/core/dispatch/dispatch_delegate_kernel.h"
 #include "tensorflow/lite/experimental/lrt/core/dispatch/dispatch_delegate_options.h"
-#include "tensorflow/lite/experimental/lrt/core/logging.h"
 
 namespace {
 
@@ -118,6 +118,17 @@ TfLiteStatus LiteRtDispatchDelegateOptionsAddOption(
   }
 
   options->AddOption(key, value);
+  return kTfLiteOk;
+}
+
+TfLiteStatus LiteRtDispatchDelegateOptionsAddSharedLibraryDir(
+    LiteRtDispatchDelegateOptions* options, const char* shared_library_dir) {
+  if (!options || !shared_library_dir) {
+    LITERT_LOG(LITERT_ERROR, "Null input");
+    return kTfLiteError;
+  }
+
+  options->SetSharedLibraryDir(shared_library_dir);
   return kTfLiteOk;
 }
 

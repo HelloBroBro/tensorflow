@@ -20,7 +20,8 @@
 #include <tuple>
 
 #include "absl/strings/string_view.h"
-#include "absl/types/span.h"
+#include "tensorflow/lite/experimental/lrt/c/litert_logging.h"
+#include "tensorflow/lite/experimental/lrt/core/util/buffer_ref.h"
 
 #ifndef NDEBUG
 #include <iostream>
@@ -35,21 +36,20 @@
 #include "tensorflow/lite/experimental/lrt/c/litert_op_code.h"
 #include "tensorflow/lite/experimental/lrt/cc/litert_support.h"
 
-#define _D_MATCH_TRUE(v)                                               \
-  {                                                                    \
-    std::cerr << "failed match true " << __FILE__ << __LINE__ << "\n"; \
-    if (!(v)) return false;                                            \
+#define _D_MATCH_TRUE(v)                             \
+  {                                                  \
+    if (!(v)) {                                      \
+      LITERT_LOG(LITERT_ERROR, "Failed MATCH_TRUE"); \
+      return false;                                  \
+    }                                                \
   }
 
-#define _D_MATCH_EQ(lhs, rhs)                                        \
-  {                                                                  \
-    std::cerr << "failed match eq " << __FILE__ << __LINE__ << "\n"; \
-    if (lhs != rhs) return false;                                    \
-  }
-
-#define _MATCH_EQ(lhs, rhs)       \
-  {                               \
-    if (lhs != rhs) return false; \
+#define _D_MATCH_EQ(lhs, rhs)                      \
+  {                                                \
+    if (lhs != rhs) {                              \
+      LITERT_LOG(LITERT_ERROR, "Failed MATCH_EQ"); \
+      return false;                                \
+    }                                              \
   }
 
 #define _MATCH_TRUE(v)      \
@@ -57,6 +57,10 @@
     if (!(v)) return false; \
   }
 
+#define _MATCH_EQ(lhs, rhs)       \
+  {                               \
+    if (lhs != rhs) return false; \
+  }
 #ifndef NDEBUG
 #define MATCH_EQ(lhs, rhs) _D_MATCH_EQ(lhs, rhs)
 #define MATCH_TRUE(v) _D_MATCH_TRUE(v)
@@ -70,6 +74,7 @@ namespace graph_tools {
 using RankedTypeInfo = std::tuple<LiteRtElementType, llvm::ArrayRef<int32_t>>;
 
 using TensorUseInfo = std::tuple<LiteRtOp, LiteRtParamIndex>;
+using ::litert::BufferRef;
 
 //===----------------------------------------------------------------------===//
 //                               Getters                                      //
@@ -214,14 +219,17 @@ inline LiteRtResult<LiteRtSubgraph> GetSubgraph(LiteRtModel model) {
   return LiteRtResult<LiteRtSubgraph>::FromValue(subgraph);
 }
 
-inline LiteRtResult<FbConstBufferT> GetMetadata(LiteRtModel model,
-                                                const absl::string_view key) {
-  const void* buf;
+// Get raw metadata buffer from model if it exists.
+inline LiteRtResult<BufferRef<uint8_t>> GetMetadata(
+    LiteRtModel model, const absl::string_view key) {
+  using ResT = LiteRtResult<BufferRef<uint8_t>>;
+  const uint8_t* buf;
   size_t size;
   LITERT_RETURN_RESULT_IF_NOT_OK(
-      LiteRtModelGetMetadata(model, key.data(), &buf, &size), FbConstBufferT);
-  auto res = absl::MakeConstSpan(reinterpret_cast<const FbCharT*>(buf), size);
-  return LiteRtResult<FbConstBufferT>::FromValue(res);
+      LiteRtModelGetMetadata(model, key.data(),
+                             reinterpret_cast<const void**>(&buf), &size),
+      BufferRef<uint8_t>);
+  return ResT::FromValue(BufferRef(buf, size));
 }
 
 //===----------------------------------------------------------------------===//

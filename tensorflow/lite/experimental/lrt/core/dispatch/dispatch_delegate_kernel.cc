@@ -26,6 +26,7 @@
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/experimental/lrt/c/litert_common.h"
 #include "tensorflow/lite/experimental/lrt/c/litert_dispatch_delegate.h"
+#include "tensorflow/lite/experimental/lrt/c/litert_logging.h"
 #include "tensorflow/lite/experimental/lrt/c/litert_model.h"
 #include "tensorflow/lite/experimental/lrt/c/litert_tensor_buffer.h"
 #include "tensorflow/lite/experimental/lrt/c/litert_tensor_buffer_requirements.h"
@@ -33,7 +34,6 @@
 #include "tensorflow/lite/experimental/lrt/cc/litert_tensor_buffer.h"
 #include "tensorflow/lite/experimental/lrt/cc/litert_tensor_buffer_requirements.h"
 #include "tensorflow/lite/experimental/lrt/core/dispatch/dispatch_delegate_options.h"
-#include "tensorflow/lite/experimental/lrt/core/logging.h"
 #include "tensorflow/lite/experimental/lrt/core/tfl_utils.h"
 #include "tensorflow/lite/experimental/lrt/core/utils.h"
 #include "tensorflow/lite/experimental/lrt/vendors/c/litert_dispatch.h"
@@ -74,10 +74,9 @@ DispatchDelegateKernel::~DispatchDelegateKernel() {
 
 absl::StatusOr<DispatchDelegateKernel::Ptr> DispatchDelegateKernel::Create(
     std::string&& graph_name, const LiteRtDispatchDelegateOptions& options) {
-  auto dispatch_api_lib_path =
-      options.GetOption(LiteRtDispatchDelegateOptions::kDispatchApiLibPath);
-  if (auto status = LiteRtDispatchInitialize(dispatch_api_lib_path.has_value()
-                                                 ? dispatch_api_lib_path->data()
+  auto shared_library_dir = options.GetSharedLibraryDir();
+  if (auto status = LiteRtDispatchInitialize(shared_library_dir.has_value()
+                                                 ? shared_library_dir->data()
                                                  : nullptr);
       status != kLiteRtStatusOk) {
     LITERT_LOG(LITERT_ERROR, "Failed to initialize Dispatch API: %d", status);

@@ -18,9 +18,36 @@ package(
 )
 
 cc_library(
+    name = "litert_logging",
+    srcs = [
+        "litert_logging.cc",
+    ],
+    hdrs = [
+        "litert_logging.h",
+    ],
+    deps = [
+        ":litert_c_api",
+        "//tensorflow/lite:minimal_logging",
+    ],
+)
+
+cc_test(
+    name = "litert_logging_test",
+    srcs = [
+        "litert_logging_test.cc",
+    ],
+    deps = [
+        ":litert_c_api",
+        ":litert_logging",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "litert_c_api",
     hdrs = [
         "litert_common.h",
+        "litert_logging.h",
         "litert_model.h",
         "litert_op_code.h",
         "litert_options.h",
@@ -33,7 +60,12 @@ cc_library(
 )
 
 cc_library(
-    name = "litert_tensor_buffer_c_api",
+    name = "litert_tensor_buffer",
+    srcs = [
+        "litert_event.cc",
+        "litert_tensor_buffer.cc",
+        "litert_tensor_buffer_requirements.cc",
+    ],
     hdrs = [
         "litert_event.h",
         "litert_tensor_buffer.h",
@@ -41,6 +73,44 @@ cc_library(
     ],
     deps = [
         ":litert_c_api",
+        ":litert_logging",
+        "//tensorflow/lite/experimental/lrt/core:tensor_buffer",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_test(
+    name = "litert_tensor_buffer_test",
+    srcs = [
+        "litert_tensor_buffer_test.cc",
+    ],
+    linkopts = select({
+        "//tensorflow:android": ["-landroid"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":litert_c_api",
+        ":litert_tensor_buffer",
+        "//tensorflow/lite/experimental/lrt/core:tensor_buffer",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "litert_tensor_buffer_requirements_test",
+    srcs = [
+        "litert_tensor_buffer_requirements_test.cc",
+    ],
+    linkopts = select({
+        "//tensorflow:android": ["-landroid"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":litert_c_api",
+        ":litert_tensor_buffer",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 

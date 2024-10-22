@@ -16,17 +16,23 @@
 
 #include <dlfcn.h>
 
-#include "absl/log/absl_log.h"
+#include "tensorflow/lite/experimental/lrt/c/litert_logging.h"
 
-#define Load(H, S)                                               \
-  H = reinterpret_cast<decltype(&S)>(::dlsym(dlib_handle_, #S)); \
-  if (!H) {                                                      \
-    ABSL_LOG(WARNING) << "Failed to load symbol " << #S << ": "  \
-                      << ::dlerror();                            \
+#define Load(H, S)                                                 \
+  H = reinterpret_cast<decltype(&S)>(::dlsym(dlib_handle_, #S));   \
+  if (!H) {                                                        \
+    LITERT_LOG(LITERT_WARNING, "Failed to load symbol %s: %s", #S, \
+               ::dlerror());                                       \
   }
 
 namespace litert {
 namespace google_tensor {
+
+namespace {
+// Currently the SouthBound implementation is bundled inside the Edge TPU
+// runtime shared library.
+constexpr const char* kSouthBoundLibPath = "/vendor/lib64/libedgetpu_util.so";
+}  // namespace
 
 Southbound::Southbound() : thr_functions_(new ThrFunctions) {}
 
@@ -36,16 +42,21 @@ Southbound::~Southbound() {
   }
 }
 
-absl::StatusOr<std::unique_ptr<Southbound>> Southbound::Create() {
+absl::StatusOr<std::unique_ptr<Southbound>> Southbound::Create(
+    std::optional<std::string> shared_library_dir) {
   std::unique_ptr<Southbound> southbound(new Southbound);
-  if (auto status = southbound->LoadSymbols(); !status.ok()) {
+  if (auto status = southbound->LoadSymbols(shared_library_dir); !status.ok()) {
     return status;
   }
 
   return southbound;
 }
 
-absl::Status Southbound::LoadSymbols() {
+absl::Status Southbound::LoadSymbols(
+    std::optional<std::string> shared_library_dir) {
+  // Always load the Southbound API library from the vendor partition.
+  (void)shared_library_dir;
+
   dlib_handle_ = ::dlopen(kSouthBoundLibPath, RTLD_NOW | RTLD_LOCAL);
   if (!dlib_handle_) {
     return absl::InternalError("Failed to load Southbound shared library");
@@ -123,7 +134,7 @@ absl::Status Southbound::LoadSymbols() {
   Load(thr_functions_->thr_vendor_set_system_attribute_int64,
        thrVendorSetSystemAttributeInt64);
 
-  ABSL_LOG(INFO) << "SouthBound symbols loaded.";
+  LITERT_LOG(LITERT_INFO, "SouthBound symbols loaded");
   return {};
 }
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "tensorflow/lite/experimental/lrt/c/litert_event.h"
+#include "tensorflow/lite/experimental/lrt/core/event.h"
 
 #include <fcntl.h>
 #include <poll.h>
@@ -24,32 +24,10 @@
 #include <cstring>
 
 #include "tensorflow/lite/experimental/lrt/c/litert_common.h"
-#include "tensorflow/lite/experimental/lrt/core/logging.h"
+#include "tensorflow/lite/experimental/lrt/c/litert_logging.h"
 
-struct LiteRtEventT {
+LiteRtStatus LiteRtEventT::Wait(int64_t timeout_in_ms) {
 #if LITERT_HAS_SYNC_FENCE_SUPPORT
-  int fd;
-  bool owns_fd;
-#endif
-};
-
-#if LITERT_HAS_SYNC_FENCE_SUPPORT
-LiteRtStatus LiteRtEventCreateFromSyncFenceFd(int sync_fence_fd, bool owns_fd,
-                                              LiteRtEvent* event) {
-  *event = new LiteRtEventT{.fd = sync_fence_fd, .owns_fd = owns_fd};
-  return kLiteRtStatusOk;
-}
-
-LiteRtStatus LiteRtEventGetSyncFenceFd(LiteRtEvent event, int* sync_fence_fd) {
-  *sync_fence_fd = event->fd;
-  return kLiteRtStatusOk;
-}
-#endif
-
-LiteRtStatus LiteRtEventWait(LiteRtEvent event, int64_t timeout_in_ms) {
-#if LITERT_HAS_SYNC_FENCE_SUPPORT
-  int fd = event->fd;
-
   struct pollfd fds = {
       .fd = fd,
       .events = POLLIN,
@@ -85,16 +63,10 @@ inline bool IsFdValid(int fd) {
 }
 }  // namespace
 
-LiteRtStatus LiteRtEventDestroy(LiteRtEvent event) {
+LiteRtEventT::~LiteRtEventT() {
 #if LITERT_HAS_SYNC_FENCE_SUPPORT
-  if (event->owns_fd && IsFdValid(event->fd)) {
-    ::close(event->fd);
+  if (owns_fd && IsFdValid(fd)) {
+    ::close(fd);
   }
-  delete event;
-  return kLiteRtStatusOk;
-#else
-  LITERT_LOG(LITERT_ERROR,
-             "LiteRtEventDestroy not implemented for this platform");
-  return kLiteRtStatusErrorUnsupported;
 #endif
 }
