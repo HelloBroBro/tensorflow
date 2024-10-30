@@ -100,66 +100,6 @@ class GpuDriver {
   // https://rocm.docs.amd.com/projects/HIPIFY/en/latest/tables/CUDA_Driver_API_functions_supported_by_HIP.html#graph-management
   static absl::Status DestroyGraphExec(GpuGraphExecHandle exec);
 
-  // Write a DOT file describing graph structure.
-  // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__GRAPH.html#group__CUDA__GRAPH_1g0fb0c4d319477a0a98da005fcb0dacc4
-  // https://rocm.docs.amd.com/projects/HIPIFY/en/latest/tables/CUDA_Driver_API_functions_supported_by_HIP.html#graph-management
-  static absl::StatusOr<std::string> GraphDebugDotPrint(
-      GpuGraphHandle graph, const char* path,
-      bool return_printed_graph = false);
-
-  // Creates a conditional handle.
-  // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__GRAPH.html#group__CUDA__GRAPH_1gece6f3b9e85d0edb8484d625fe567376
-  static absl::Status GraphConditionalHandleCreate(
-      GpuGraphConditionalHandle* handle, GpuGraphHandle graph, Context* context,
-      unsigned int default_launch_value, unsigned int flags);
-
-  // Conditional node parameters.
-  // https://docs.nvidia.com/cuda/cuda-driver-api/structCUDA__CONDITIONAL__NODE__PARAMS.html#structCUDA__CONDITIONAL__NODE__PARAMS
-  struct GpuGraphConditionalNodeParams {
-    // Conditional node type.
-    // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TYPES.html#group__CUDA__TYPES_1g04ade961d0263336423eb216fbe514da
-    enum class Type { kIf, kWhile };
-
-    // A struct for returning output arguments back to the caller.
-    struct Result {
-      GpuGraphHandle graph;
-    };
-
-    Type type;
-    GpuGraphConditionalHandle handle;
-    Context* context;
-  };
-
-  // Graph node parameters
-  // https://docs.nvidia.com/cuda/cuda-driver-api/structCUgraphNodeParams.html#structCUgraphNodeParams
-  using GpuGraphNodeParams = std::variant<GpuGraphConditionalNodeParams>;
-  using GpuGraphNodeResult =
-      std::variant<GpuGraphConditionalNodeParams::Result>;
-
-  // Adds a node of arbitrary type to a graph.
-  // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__GRAPH.html#group__CUDA__GRAPH_1g4210c258cbba352040a26d1b4e658f9d
-  static absl::StatusOr<GpuGraphNodeResult> GraphAddNode(
-      GpuGraphNodeHandle* node, GpuGraphHandle graph,
-      absl::Span<const GpuGraphNodeHandle> deps,
-      const GpuGraphNodeParams& params);
-
-  // Creates a kernel execution node and adds it to a graph.
-  // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__GRAPH.html#group__CUDA__GRAPH_1g50d871e3bd06c1b835e52f2966ef366b
-  // https://rocm.docs.amd.com/projects/HIPIFY/en/latest/tables/CUDA_Driver_API_functions_supported_by_HIP.html#graph-management
-  static absl::Status GraphAddKernelNode(
-      GpuGraphNodeHandle* node, GpuGraphHandle graph,
-      absl::Span<const GpuGraphNodeHandle> deps, absl::string_view kernel_name,
-      GpuFunctionHandle function, unsigned int grid_dim_x,
-      unsigned int grid_dim_y, unsigned int grid_dim_z,
-      unsigned int block_dim_x, unsigned int block_dim_y,
-      unsigned int block_dim_z, unsigned int shared_mem_bytes,
-      void** kernel_params, void** extra);
-
-  // Counts number of nodes in the graph.
-  // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__GRAPH.html#group__CUDA__GRAPH_1gfa35a8e2d2fc32f48dbd67ba27cf27e5
-  // https://docs.amd.com/projects/HIP/en/docs-5.0.0/doxygen/html/group___graph.html#gaf006701d98164ed3492755bbb19bab83
-  static absl::StatusOr<size_t> GraphGetNodeCount(GpuGraphHandle graph);
-
   // The CUDA stream callback type signature.
   // The data passed to AddStreamCallback is subsequently passed to this
   // callback when it fires.
