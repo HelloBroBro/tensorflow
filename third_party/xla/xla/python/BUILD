@@ -858,7 +858,9 @@ cc_library(
     deps = [
         ":python_ref_manager",
         # placeholder for index annotation deps
+        "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "@nanobind",
         "@local_config_python//:python_headers",  # buildcleaner: keep
@@ -1070,6 +1072,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
         "@nanobind",
+        "@local_config_python//:python_headers",
         "//xla/pjrt:lru_cache",
     ],
 )
