@@ -23,7 +23,6 @@
 #include <gtest/gtest.h>
 #include "testing/base/public/unique-test-directory.h"
 #include "absl/strings/string_view.h"
-#include "tensorflow/lite/experimental/litert/core/graph_tools.h"
 #include "tensorflow/lite/experimental/litert/test/common.h"
 #include "tensorflow/lite/experimental/litert/tools/dump.h"
 
@@ -39,8 +38,9 @@ constexpr absl::string_view kTestManufacturer = "ExampleSocManufacturer";
 constexpr absl::string_view kTestModels = "ExampleSocModel";
 
 TEST(CompilerPluginTest, LoadTestPlugin) {
-  ASSERT_RESULT_OK_MOVE(CompilerPlugin::VecT plugins,
-                        CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
+  LITERT_ASSERT_RESULT_OK_MOVE(
+      CompilerPlugin::VecT plugins,
+      CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
 
   ASSERT_EQ(plugins.size(), 1);
   EXPECT_EQ(plugins.front().SocManufacturer(), kTestManufacturer);
@@ -52,17 +52,19 @@ TEST(CompilerPluginTest, LoadTestPluginWithMalformed) {
   const auto dir = testing::UniqueTestDirectory();
   TouchTestFile("notLibLiteRt.so", dir);
 
-  ASSERT_RESULT_OK_MOVE(CompilerPlugin::VecT plugins,
-                        CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
+  LITERT_ASSERT_RESULT_OK_MOVE(
+      CompilerPlugin::VecT plugins,
+      CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
 
   ASSERT_EQ(plugins.size(), 1);
   EXPECT_EQ(plugins.front().SocManufacturer(), kTestManufacturer);
 }
 
 TEST(CompilerPluginTest, MultipleValidPlugins) {
-  ASSERT_RESULT_OK_MOVE(CompilerPlugin::VecT plugins,
-                        CompilerPlugin::LoadPlugins(
-                            {kTestPluginSearchPath, kTestPluginSearchPath}));
+  LITERT_ASSERT_RESULT_OK_MOVE(
+      CompilerPlugin::VecT plugins,
+      CompilerPlugin::LoadPlugins(
+          {kTestPluginSearchPath, kTestPluginSearchPath}));
 
   ASSERT_EQ(plugins.size(), 2);
   EXPECT_EQ(plugins.front().SocManufacturer(), kTestManufacturer);
@@ -70,8 +72,9 @@ TEST(CompilerPluginTest, MultipleValidPlugins) {
 }
 
 TEST(CompilerPluginTest, MoveAssign) {
-  ASSERT_RESULT_OK_MOVE(CompilerPlugin::VecT plugins,
-                        CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
+  LITERT_ASSERT_RESULT_OK_MOVE(
+      CompilerPlugin::VecT plugins,
+      CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
 
   ASSERT_EQ(plugins.size(), 1);
   EXPECT_EQ(plugins.front().SocManufacturer(), kTestManufacturer);
@@ -82,8 +85,9 @@ TEST(CompilerPluginTest, MoveAssign) {
 }
 
 TEST(CompilerPluginTest, MoveConstruct) {
-  ASSERT_RESULT_OK_MOVE(CompilerPlugin::VecT plugins,
-                        CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
+  LITERT_ASSERT_RESULT_OK_MOVE(
+      CompilerPlugin::VecT plugins,
+      CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
 
   ASSERT_EQ(plugins.size(), 1);
   EXPECT_EQ(plugins.front().SocManufacturer(), kTestManufacturer);
@@ -94,8 +98,9 @@ TEST(CompilerPluginTest, MoveConstruct) {
 }
 
 TEST(CompilerPluginTest, SocModels) {
-  ASSERT_RESULT_OK_MOVE(CompilerPlugin::VecT plugins,
-                        CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
+  LITERT_ASSERT_RESULT_OK_MOVE(
+      CompilerPlugin::VecT plugins,
+      CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
   ASSERT_EQ(plugins.size(), 1);
   EXPECT_EQ(plugins.front().SocManufacturer(), kTestManufacturer);
 
@@ -104,39 +109,41 @@ TEST(CompilerPluginTest, SocModels) {
 }
 
 TEST(CompilerPluginTest, PartitionModel) {
-  ASSERT_RESULT_OK_MOVE(CompilerPlugin::VecT plugins,
-                        CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
+  LITERT_ASSERT_RESULT_OK_MOVE(
+      CompilerPlugin::VecT plugins,
+      CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
   ASSERT_EQ(plugins.size(), 1);
   EXPECT_EQ(plugins.front().SocManufacturer(), kTestManufacturer);
 
   auto model = litert::testing::LoadTestFileModel("mul_simple.tflite");
+  auto subgraph = model.MainSubgraph();
 
-  ASSERT_RESULT_OK_ASSIGN(auto ops, plugins.front().PartitionModel(model));
-  EXPECT_EQ(ops.size(), 2);
+  EXPECT_EQ(subgraph->Ops().size(), 2);
 }
 
 TEST(CompilerPluginTest, CompileModel) {
-  ASSERT_RESULT_OK_MOVE(CompilerPlugin::VecT plugins,
-                        CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
+  LITERT_ASSERT_RESULT_OK_MOVE(
+      CompilerPlugin::VecT plugins,
+      CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
   ASSERT_EQ(plugins.size(), 1);
   EXPECT_EQ(plugins.front().SocManufacturer(), kTestManufacturer);
 
   auto model = litert::testing::LoadTestFileModel("mul_simple.tflite");
-  ASSERT_RESULT_OK_ASSIGN(auto subgraph,
-                          litert::internal::GetSubgraph(model.Get()));
+  auto subgraph = model.MainSubgraph();
 
   std::ostringstream byte_code_out;
   std::vector<std::string> call_info_out;
-  ASSERT_STATUS_OK(plugins.front().Compile(kTestModels, {subgraph},
-                                           byte_code_out, call_info_out));
+  LITERT_ASSERT_STATUS_OK(plugins.front().Compile(
+      kTestModels, {subgraph->Get()}, byte_code_out, call_info_out));
 
   EXPECT_GT(byte_code_out.str().size(), 0);
   EXPECT_EQ(call_info_out.size(), 1);
 }
 
 TEST(CompilerPluginTest, Dump) {
-  ASSERT_RESULT_OK_MOVE(CompilerPlugin::VecT plugins,
-                        CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
+  LITERT_ASSERT_RESULT_OK_MOVE(
+      CompilerPlugin::VecT plugins,
+      CompilerPlugin::LoadPlugins({kTestPluginSearchPath}));
   ASSERT_EQ(plugins.size(), 1);
 
   std::stringstream dump;
