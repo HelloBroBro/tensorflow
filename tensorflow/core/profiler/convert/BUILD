@@ -216,6 +216,20 @@ tf_cc_test(
     ],
 )
 
+tf_cc_test(
+    name = "xplane_to_trace_container_test",
+    srcs = ["xplane_to_trace_container_test.cc"],
+    deps = [
+        ":xplane_to_trace_container",
+        "//tensorflow/core/util/proto:proto_utils",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
+        "@com_google_googletest//:gtest_main",
+        "@local_xla//xla/tsl/profiler/utils:math_utils",
+    ],
+)
+
 cc_library(
     name = "op_stats_to_input_pipeline_analysis",
     srcs = ["op_stats_to_input_pipeline_analysis.cc"],
@@ -332,6 +346,7 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:optional",
         "@local_tsl//tsl/profiler/protobuf:xplane_proto_cc",
         "@local_xla//xla/tsl/profiler/utils:math_utils",
         "@local_xla//xla/tsl/profiler/utils:tf_xplane_visitor",
