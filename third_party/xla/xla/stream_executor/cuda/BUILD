@@ -913,6 +913,30 @@ xla_cc_test(
 )
 
 cc_library(
+    name = "nvjitlink_known_issues",
+    srcs = ["nvjitlink_known_issues.cc"],
+    hdrs = ["nvjitlink_known_issues.h"],
+    deps = [":nvjitlink"],
+)
+
+xla_cc_test(
+    name = "nvjitlink_known_issues_test",
+    srcs = ["nvjitlink_known_issues_test.cc"],
+    # LibNvJitLink is a binary-only library. Therefore is not compatible with msan/tsan.
+    tags = [
+        "nomsan",
+        "notsan",
+    ],
+    deps = [
+        ":nvjitlink_known_issues",
+        ":nvjitlink_support",
+        "@com_google_googletest//:gtest",
+        "@local_tsl//tsl/platform:test",
+        "@local_tsl//tsl/platform:test_main",
+    ],
+)
+
+cc_library(
     name = "cuda_asm_compiler",
     srcs = ["cuda_asm_compiler.cc"],
     hdrs = ["cuda_asm_compiler.h"],
@@ -1322,9 +1346,9 @@ cc_library(
         "//xla/stream_executor:launch_dim",
         "//xla/stream_executor:semantic_version",
         "//xla/stream_executor:stream",
+        "//xla/stream_executor:stream_executor_h",
         "//xla/stream_executor:typed_kernel_factory",
         "//xla/stream_executor/gpu:gpu_command_buffer",
-        "//xla/stream_executor/gpu:gpu_executor_header",
         "//xla/stream_executor/gpu:gpu_stream",
         "//xla/stream_executor/gpu:scoped_gpu_graph_exec",
         "//xla/stream_executor/gpu:scoped_update_mode",
