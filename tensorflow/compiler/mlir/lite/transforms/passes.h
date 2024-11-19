@@ -23,9 +23,11 @@ limitations under the License.
 #include "mlir/Pass/Pass.h"  // from @llvm-project
 #include "mlir/Pass/PassRegistry.h"  // from @llvm-project  // IWYU pragma: keep
 #include "tensorflow/compiler/mlir/lite/transforms/canonicalize_boundary_value_pass.h"
+#include "tensorflow/compiler/mlir/lite/transforms/optimize_batch_matmul_pass.h"
 #include "tensorflow/compiler/mlir/lite/transforms/optimize_pass.h"
 #include "tensorflow/compiler/mlir/lite/transforms/pass_registry_utils.h"
 #include "tensorflow/compiler/mlir/lite/transforms/push_transpose_through_ewise_pass.h"
+#include "tensorflow/compiler/mlir/lite/transforms/tf_legalizations/analyze_variables_pass.h"
 #include "tensorflow/compiler/mlir/lite/transforms/unfreeze_global_constants.h"
 #include "tensorflow/compiler/mlir/quantization/common/quantization_lib/quantization_config.h"
 
@@ -81,7 +83,9 @@ inline std::unique_ptr<mlir::Pass> CreateOptimizePass() {
 }
 
 // Creates an instance of the Tensorflow Lite batch matmul Optimize pass.
-std::unique_ptr<OperationPass<func::FuncOp>> CreateOptimizeBatchMatmulPass();
+inline std::unique_ptr<mlir::Pass> CreateOptimizeBatchMatmulPass() {
+  return Create<OptimizeBatchMatmulPass>();
+}
 
 // Creates an instance of the TensorFlow Lite dialect PrepareTF pass.
 std::unique_ptr<OperationPass<func::FuncOp>> CreatePrepareTFPass(
@@ -223,7 +227,9 @@ std::unique_ptr<OperationPass<ModuleOp>> CreateLegalizeVariablesPass();
 
 // Creates a pass which analyze the model whether it is safe to use
 // native TFLite variables or not.
-std::unique_ptr<OperationPass<ModuleOp>> CreateAnalyzeVariablesPass();
+inline std::unique_ptr<mlir::Pass> CreateAnalyzeVariablesPass() {
+  return Create<AnalyzeVariablesPass>();
+}
 
 // Creates a pass which is responsible for legalizing TensorFlow static hash
 // tables to TensorFlow Lite hash tables.
@@ -308,8 +314,14 @@ std::unique_ptr<OperationPass<func::FuncOp>> CreateDefaultQuantParamsPass(
 inline void registerTensorFlowLitePasses() {
   registerTensorFlowLiteTdPasses();
   // Register TFLite Converter Passes
-  Register<OptimizePass, OptimizePassOptions>();
   Register<UnfreezeMutableGlobalTensorsPass>();
+
+  // TF Legalization Passes
+  Register<AnalyzeVariablesPass>();
+
+  // TFL Optimization Passes
+  Register<OptimizePass, OptimizePassOptions>();
+  Register<OptimizeBatchMatmulPass>();
   Register<PushTransposeThroughEwisePass>();
   Register<CanonicalizeBoundaryValuePass>();
 }
