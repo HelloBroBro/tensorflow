@@ -383,27 +383,9 @@ def TrimFunctionsPass : Pass<"tfl-trim-funcs-tf", "mlir::ModuleOp"> {
   ];
 }
 
-def UnfoldLargeSplatConstantPass : Pass<"unfold-large-splat-constant", "mlir::ModuleOp"> {
-  let summary = "Unfold large splat constant tensors.";
-  let constructor = "CreateUnfoldLargeSplatConstantPass()";
-  let dependentDialects = ["TFL::TensorFlowLiteDialect"];
-}
-
-def WhileOutlinePass : Pass<"tfl-while-loop-outline", "mlir::ModuleOp"> {
-  let summary = "Hoist while op regions into functions";
-  let constructor = "CreateWhileOutlinePass()";
-  let dependentDialects = ["TF::TensorFlowDialect"];
-}
-
 def IfOutlinePass : Pass<"tfl-if-outline", "mlir::ModuleOp"> {
   let summary = "Hoist if op regions into functions";
   let constructor = "CreateIfOutlinePass()";
-  let dependentDialects = ["TFL::TensorFlowLiteDialect"];
-}
-
-def LegalizeTensorListPass : Pass<"tfl-legalize-tensorlist", "mlir::ModuleOp"> {
-  let summary = "Legalize TensorFlow tensorlist ops to TensorFlow Lite custom.";
-  let constructor = "CreateLegalizeTensorListPass()";
   let dependentDialects = ["TFL::TensorFlowLiteDialect"];
 }
 
