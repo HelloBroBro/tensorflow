@@ -26,6 +26,7 @@ limitations under the License.
 
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/types/span.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -156,7 +157,7 @@ HloSharding ReshapeToTileDimension(const HloSharding& sharding, int64_t dim,
 bool ContainsTileSharding(const HloModule& module);
 
 // Returns the preferred output sharding for a gather op based on the sharding
-// of the indces.
+// of the indices.
 HloSharding GatherOutputShardingFromIndexIndexPassthroughDimensions(
     const HloSharding& index_sharding, const HloInstruction* hlo);
 
@@ -488,7 +489,9 @@ std::optional<int64_t> GetFirstMergeableDimForSortOperand(
 std::optional<GatherScatterParallelDims> GetGatherScatterBatchParallelDims(
     const HloInstruction* operand, const HloInstruction* indices,
     absl::Span<const int64_t> slice_sizes, int64_t index_vector_dim,
-    absl::Span<const int64_t> index_map, const CallGraph& call_graph);
+    absl::Span<const int64_t> index_map,
+    absl::Span<const int64_t> indices_batching_dims,
+    const CallGraph& call_graph);
 
 // Returns the sharding of an output of an instruction. Some instructions have
 // special handling like Outfeed and this function takes care of those.

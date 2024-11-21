@@ -844,16 +844,24 @@ class AsyncValuePtr {
 template <typename T>
 class CountDownAsyncValueRef {
  public:
+  CountDownAsyncValueRef() = default;
+
   CountDownAsyncValueRef(AsyncValueRef<T> ref, int64_t cnt)
-      : ref_(ref), state_(std::make_shared<State>(cnt)) {
-    DCHECK(ref.IsConstructed()) << "AsyncValue must be in constructed state";
-    DCHECK(ref.IsUnavailable()) << "AsyncValue must be in unavailable state";
+      : state_(std::make_shared<State>(std::move(ref), cnt)) {
+    DCHECK(state_->ref.IsConstructed()) << "AsyncValue must be constructed";
+    DCHECK(state_->ref.IsUnavailable()) << "AsyncValue must be unavailable";
     DCHECK_GT(cnt, 0) << "Count must be positive";
+  }
+
+  template <typename... Args>
+  explicit CountDownAsyncValueRef(Args&&... args, int64_t cnt)
+      : CountDownAsyncValueRef(
+            MakeConstructedAsyncValueRef<T>(std::forward<Args>(args)...), cnt) {
   }
 
   // Drops the count by one and returns true if async value became available.
   bool CountDown(const absl::Status& status = absl::OkStatus()) {
-    DCHECK(ref_.IsUnavailable()) << "AsyncValue must be in unavailable state";
+    DCHECK(state_->ref.IsUnavailable()) << "AsyncValue must be unavailable";
     DCHECK_GT(state_->cnt.load(), 0) << "Count must be positive";
 
     if (ABSL_PREDICT_FALSE(!status.ok())) {
@@ -862,17 +870,29 @@ class CountDownAsyncValueRef {
       state_->status = status;
     }
 
+    // Note on the acq_rel barrier below:
+    // 1. It is an acquire barrier because we want to make sure that, if the
+    // current thread sets is_error above, then another thread who might set
+    // cnt to 0 will read an up-to-date is_error. An acquire barrier achieves
+    // this by forcing ordering between the is_error load and the fetch_sub.
+    // Note that there is a control dependence between the two, not a data
+    // dependence; we therefore need an acquire ("read") barrier to enforce
+    // ordering, otherwise the compiler or CPU might speculatively perform
+    // the second load before the first.
+    // 2. It is also a release barrier because all prior writes in the thread
+    // should be visible to other threads after the fetch_sub -- otherwise other
+    // threads might not see updated values.
+    bool is_complete = state_->cnt.fetch_sub(1, std::memory_order_acq_rel) == 1;
     // If this was the last count down, we have to decide if we set async value
     // to concrete or error state.
-    bool is_complete = state_->cnt.fetch_sub(1, std::memory_order_relaxed) == 1;
     if (ABSL_PREDICT_FALSE(is_complete)) {
       bool is_error = state_->is_error.load(std::memory_order_relaxed);
       if (ABSL_PREDICT_FALSE(is_error)) {
         absl::MutexLock lock(&state_->mutex);
-        ref_.SetError(state_->status);
+        state_->ref.SetError(state_->status);
         return true;
       } else {
-        ref_.SetStateConcrete();
+        state_->ref.SetStateConcrete();
         return true;
       }
     }
@@ -880,17 +900,21 @@ class CountDownAsyncValueRef {
     return false;
   }
 
+  AsyncValueRef<T> AsRef() const { return state_->ref; }
+  AsyncValuePtr<T> AsPtr() const { return state_->ref.AsPtr(); }
+
  private:
   struct State {
-    explicit State(int64_t cnt) : cnt(cnt), is_error(false) {}
+    State(AsyncValueRef<T> ref, int64_t cnt)
+        : ref(std::move(ref)), cnt(cnt), is_error(false) {}
 
+    AsyncValueRef<T> ref;
     std::atomic<int64_t> cnt;
     std::atomic<bool> is_error;
     absl::Mutex mutex;
     absl::Status status ABSL_GUARDED_BY(mutex);
   };
 
-  AsyncValueRef<T> ref_;
   std::shared_ptr<State> state_;
 };
 
