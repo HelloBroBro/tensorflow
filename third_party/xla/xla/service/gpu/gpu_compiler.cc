@@ -275,6 +275,7 @@ limitations under the License.
 
 #ifdef PLATFORM_GOOGLE
 #include "xla/hlo/experimental/auto_sharding/auto_sharding.h"
+#include "xla/hlo/experimental/auto_sharding/auto_sharding_option.h"
 #endif  // PLATFORM_GOOGLE
 
 namespace xla {
@@ -603,43 +604,17 @@ absl::Status RunSPMDPasses(
           num_partitions);
     }
     HloPassPipeline spmd_pipeline("spmd-partitioner");
-    AddSPMDPasses(
-        hlo_module, layout_insensitive_algsimp_opts,
-        gpu_target_config.device_description.gpu_compute_capability(),
-        spmd_pipeline,
+    AddSPMDPasses(hlo_module, layout_insensitive_algsimp_opts,
+                  gpu_target_config.device_description.gpu_compute_capability(),
+                  spmd_pipeline,
 #ifdef PLATFORM_GOOGLE
-        [&](HloPassPipeline& pipeline) {
-          if (auto_sharding) {
-            AutoShardingOption option;
-            option.enable = true;
-            if (!hlo_module->config()
-                     .auto_spmd_partitioning_mesh_shape()
-                     .empty()) {
-              option.device_mesh_shape =
-                  hlo_module->config().auto_spmd_partitioning_mesh_shape();
-            } else {
-              // Use a simple mesh shape if not specified.
-              option.device_mesh_shape = {
-                  gpu_target_config.device_description.core_count(), 1};
-            }
-            if (!hlo_module->config()
-                     .auto_spmd_partitioning_mesh_ids()
-                     .empty()) {
-              option.device_mesh_ids =
-                  hlo_module->config().auto_spmd_partitioning_mesh_ids();
-            }
-            option.memory_budget_per_device =
-                hlo_module->config()
-                    .debug_options()
-                    .xla_gpu_auto_spmd_partitioning_memory_budget_gb() *
-                1024 * 1024 * 1024;
-            option.memory_budget_ratio =
-                hlo_module->config()
-                    .debug_options()
-                    .xla_gpu_auto_spmd_partitioning_memory_budget_ratio();
-            spmd_pipeline.AddPass<AutoSharding>(option);
-          }
-        });
+                  [&](HloPassPipeline& pipeline) {
+                    if (auto_sharding) {
+                      spmd_pipeline.AddPass<AutoSharding>(
+                          DefaultAutoShardingOptionFromModuleConfig(
+                              hlo_module->config()));
+                    }
+                  });
 #else
         std::nullopt);
 #endif  // PLATFORM_GOOGLE
@@ -1919,12 +1894,11 @@ std::unique_ptr<llvm::Module> CopyToContext(const llvm::Module& module,
 }  // namespace
 
 absl::StatusOr<GpuCompiler::BackendCompileResult>
-GpuCompiler::CompileSingleModule(const HloModuleConfig& module_config,
-                                 se::GpuComputeCapability gpu_version,
-                                 const HloModule* debug_module,
-                                 llvm::Module* llvm_module, bool relocatable,
-                                 const CompileOptions& options,
-                                 std::optional<int> shard_number) {
+GpuCompiler::CompileSingleModule(
+    const HloModuleConfig& module_config,
+    const stream_executor::DeviceDescription& device_description,
+    const HloModule* debug_module, llvm::Module* llvm_module, bool relocatable,
+    const CompileOptions& options, std::optional<int> shard_number) {
   {
     // This may print multiple lines per HLO compilation because of the
     // parallelized compilation of LLVM modules.
@@ -1954,8 +1928,8 @@ GpuCompiler::CompileSingleModule(const HloModuleConfig& module_config,
 
   TF_ASSIGN_OR_RETURN(
       BackendCompileResult result,
-      CompileTargetBinary(module_config, llvm_module, gpu_version, relocatable,
-                          debug_module, options));
+      CompileTargetBinary(module_config, llvm_module, device_description,
+                          relocatable, debug_module, options));
 
   const bool should_dump = DumpingEnabledForHloModule(
       debug_module ? debug_module->name() : "", module_config.debug_options());
@@ -2031,8 +2005,9 @@ std::string SingleFunctionName(const llvm::Module& module) {
 absl::StatusOr<GpuCompiler::BackendCompileResult> GpuCompiler::CompileAndLink(
     const HloModuleConfig& module_config,
     CompileModuleResults& compile_module_results,
-    se::GpuComputeCapability gpu_version, se::StreamExecutor* stream_exec,
-    const CompileOptions& options, const HloModule* debug_module) {
+    const se::DeviceDescription& device_description,
+    se::StreamExecutor* stream_exec, const CompileOptions& options,
+    const HloModule* debug_module) {
   llvm::Module* llvm_module = &*compile_module_results.llvm_module;
 
   bool force_module_split =
@@ -2152,15 +2127,15 @@ absl::StatusOr<GpuCompiler::BackendCompileResult> GpuCompiler::CompileAndLink(
     for (int i = 0; i < llvm_modules.size(); ++i) {
       thread_pool.get_mutable()->Schedule(
           [&compile_results, i, &llvm_modules, &counter, this, &module_config,
-           &gpu_version, &debug_module, &options] {
+           &device_description, &debug_module, &options] {
             // Each thread has its own context to avoid race conditions.
             llvm::LLVMContext new_context;
             std::unique_ptr<llvm::Module> new_module =
                 CopyToContext(*llvm_modules.at(i).module, new_context);
             compile_results.at(i) = {
                 llvm_modules.at(i).name,
-                CompileSingleModule(module_config, gpu_version, debug_module,
-                                    new_module.get(),
+                CompileSingleModule(module_config, device_description,
+                                    debug_module, new_module.get(),
                                     /*relocatable=*/true, options,
                                     /*shard_number=*/i)};
             counter.DecrementCount();
@@ -2171,7 +2146,7 @@ absl::StatusOr<GpuCompiler::BackendCompileResult> GpuCompiler::CompileAndLink(
     for (int i = 0; i < llvm_modules.size(); ++i) {
       compile_results.at(i) = {
           llvm_modules.at(i).name,
-          CompileSingleModule(module_config, gpu_version, debug_module,
+          CompileSingleModule(module_config, device_description, debug_module,
                               &*llvm_modules.at(i).module,
                               /*relocatable=*/true, options,
                               /*shard_number=*/i)};
@@ -2240,7 +2215,7 @@ absl::StatusOr<GpuCompiler::BackendCompileResult> GpuCompiler::CompileAndLink(
   }
 
   auto maybe_backend_result =
-      LinkModules(gpu_version, stream_exec, std::move(binaries_to_link),
+      LinkModules(device_description, stream_exec, std::move(binaries_to_link),
                   module_config.debug_options());
   if (!maybe_backend_result.ok()) {
     LOG(ERROR) << "The CUDA linking API did not work. Please use XLA_FLAGS="
@@ -2276,7 +2251,7 @@ GpuCompiler::CompileToBackendResult(
   bool can_use_link_modules = (executor != nullptr);
   if (can_use_link_modules) {
     TF_ASSIGN_OR_RETURN(can_use_link_modules,
-                        CanUseLinkModules(module->config()));
+                        CanUseLinkModules(module->config(), gpu_device_info));
   }
   const bool split_modules =
       can_use_link_modules &&
@@ -2316,16 +2291,15 @@ GpuCompiler::CompileToBackendResult(
   // TODO(anlunx): Enable multi-threading once deviceless AOT compilation is
   // enabled.
   if (split_modules) {
-    TF_ASSIGN_OR_RETURN(backend_result,
-                        CompileAndLink(module->config(), compile_module_results,
-                                       gpu_device_info.gpu_compute_capability(),
-                                       executor, options, module));
+    TF_ASSIGN_OR_RETURN(
+        backend_result,
+        CompileAndLink(module->config(), compile_module_results,
+                       gpu_device_info, executor, options, module));
   } else {
     CHECK(compile_module_results.llvm_module_constants == nullptr);
     TF_ASSIGN_OR_RETURN(
         backend_result,
-        CompileSingleModule(module->config(),
-                            gpu_device_info.gpu_compute_capability(), module,
+        CompileSingleModule(module->config(), gpu_device_info, module,
                             &*compile_module_results.llvm_module,
                             /*relocatable=*/false, options,
                             /*shard_number=*/std::nullopt));

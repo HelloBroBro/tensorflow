@@ -1762,7 +1762,9 @@ TEST_F(MemorySpaceAssignmentTest, FilterUpdateConfigExactMatchBeforeTest) {
   const std::string text_proto = R"pb(
     overrides {
       hlo_operand_filter { instruction_name_regex: "add" operand_number: 1 }
-      override_options { before_instruction_name: "negate.3" }
+      override_options {
+        before_instruction: { instruction_regex: "%?negate.3 =.*" }
+      }
     })pb";
   TF_ASSERT_OK_AND_ASSIGN(
       options.preferred_prefetch_overrides,
@@ -1838,7 +1840,9 @@ TEST_F(MemorySpaceAssignmentTest, FilterUpdateConfigExactMatchAfterTest) {
   const std::string text_proto = R"pb(
     overrides {
       hlo_operand_filter { instruction_name_regex: "add" operand_number: 1 }
-      override_options { after_instruction_name: "negate.1" }
+      override_options {
+        after_instruction: { instruction_regex: "%?negate.1 =.*" }
+      }
     })pb";
   TF_ASSERT_OK_AND_ASSIGN(
       options.preferred_prefetch_overrides,
@@ -1914,7 +1918,9 @@ TEST_F(MemorySpaceAssignmentTest, FilterUpdateConfigExactMatchTooLateTest) {
   const std::string text_proto = R"pb(
     overrides {
       hlo_operand_filter { instruction_name_regex: "add" operand_number: 1 }
-      override_options { after_instruction_name: "negate.5" }
+      override_options {
+        after_instruction: { instruction_name_regex: "%?negate.5" }
+      }
     })pb";
   TF_ASSERT_OK_AND_ASSIGN(
       options.preferred_prefetch_overrides,
@@ -1986,7 +1992,9 @@ TEST_F(MemorySpaceAssignmentTest, FilterUpdateConfigPrecedenceTest) {
     }
     overrides {
       hlo_operand_filter { instruction_name_regex: "add" operand_number: 1 }
-      override_options { after_instruction_name: "negate.1" }
+      override_options {
+        after_instruction: { instruction_name_regex: "%?negate.1" }
+      }
     })pb";
   TF_ASSERT_OK_AND_ASSIGN(
       options.preferred_prefetch_overrides,
@@ -2062,7 +2070,9 @@ TEST_F(MemorySpaceAssignmentTest, FilterUpdateConfigExactMatchPrecedenceTest) {
   const std::string text_proto = R"pb(
     overrides {
       hlo_operand_filter { instruction_name_regex: "add" operand_number: 1 }
-      override_options { after_instruction_name: "negate.1" }
+      override_options {
+        after_instruction: { instruction_name_regex: "%?negate.1" }
+      }
     }
     overrides {
       hlo_operand_filter { size_lte: 24 size_gte: 24 }
@@ -9741,10 +9751,8 @@ TEST_F(MemorySpaceAssignmentTest, CrossProgramPrefetchTest) {
 
   auto cross_program_prefetches = module->CrossProgramPrefetches();
   EXPECT_EQ(cross_program_prefetches.size(), 1);
-  if (!cross_program_prefetches.empty()) {
-    EXPECT_EQ(cross_program_prefetches[0].parameter, 1);
-    EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({}));
-  }
+  EXPECT_EQ(cross_program_prefetches[0].parameter, 1);
+  EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({}));
 
   EXPECT_THAT(module->entry_computation()->root_instruction(),
               op::Dot(op::Parameter(0),
@@ -9801,14 +9809,10 @@ TEST_F(MemorySpaceAssignmentTest, MultiCrossProgramPrefetchTest) {
 
   auto cross_program_prefetches = module->CrossProgramPrefetches();
   EXPECT_EQ(cross_program_prefetches.size(), 2);
-  if (!cross_program_prefetches.empty()) {
-    EXPECT_EQ(cross_program_prefetches[0].parameter, 1);
-    EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({}));
-  }
-  if (cross_program_prefetches.size() > 1) {
-    EXPECT_EQ(cross_program_prefetches[1].parameter, 2);
-    EXPECT_EQ(cross_program_prefetches[1].index, ShapeIndex({}));
-  }
+  EXPECT_EQ(cross_program_prefetches[0].parameter, 1);
+  EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({}));
+  EXPECT_EQ(cross_program_prefetches[1].parameter, 2);
+  EXPECT_EQ(cross_program_prefetches[1].index, ShapeIndex({}));
 
   EXPECT_THAT(
       module->entry_computation()->root_instruction(),
@@ -9855,10 +9859,8 @@ TEST_F(MemorySpaceAssignmentTest, CrossProgramPrefetchTupleTest) {
 
   auto cross_program_prefetches = module->CrossProgramPrefetches();
   EXPECT_EQ(cross_program_prefetches.size(), 1);
-  if (!cross_program_prefetches.empty()) {
-    EXPECT_EQ(cross_program_prefetches[0].parameter, 0);
-    EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({1}));
-  }
+  EXPECT_EQ(cross_program_prefetches[0].parameter, 0);
+  EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({1}));
 }
 
 TEST_F(MemorySpaceAssignmentTest, CrossProgramPrefetchBitcastTest) {
@@ -9897,10 +9899,8 @@ TEST_F(MemorySpaceAssignmentTest, CrossProgramPrefetchBitcastTest) {
 
   auto cross_program_prefetches = module->CrossProgramPrefetches();
   EXPECT_EQ(cross_program_prefetches.size(), 1);
-  if (!cross_program_prefetches.empty()) {
-    EXPECT_EQ(cross_program_prefetches[0].parameter, 1);
-    EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({}));
-  }
+  EXPECT_EQ(cross_program_prefetches[0].parameter, 1);
+  EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({}));
 }
 
 TEST_F(MemorySpaceAssignmentTest, CrossProgramPrefetchBitcastTupleTest) {
@@ -9943,10 +9943,8 @@ TEST_F(MemorySpaceAssignmentTest, CrossProgramPrefetchBitcastTupleTest) {
 
   auto cross_program_prefetches = module->CrossProgramPrefetches();
   EXPECT_EQ(cross_program_prefetches.size(), 1);
-  if (!cross_program_prefetches.empty()) {
-    EXPECT_EQ(cross_program_prefetches[0].parameter, 0);
-    EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({1}));
-  }
+  EXPECT_EQ(cross_program_prefetches[0].parameter, 0);
+  EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({1}));
 }
 
 TEST_F(MemorySpaceAssignmentTest, CrossProgramPrefetchNestedTupleTest) {
@@ -10479,10 +10477,8 @@ TEST_F(MemorySpaceAssignmentTest, CrossProgramPrefetchNoReuse) {
 
   auto cross_program_prefetches = module->CrossProgramPrefetches();
   EXPECT_EQ(cross_program_prefetches.size(), 1);
-  if (!cross_program_prefetches.empty()) {
-    EXPECT_EQ(cross_program_prefetches[0].parameter, 1);
-    EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({}));
-  }
+  EXPECT_EQ(cross_program_prefetches[0].parameter, 1);
+  EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({}));
 
   TF_ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<HloDataflowAnalysis> dataflow_analysis,
@@ -10649,10 +10645,8 @@ TEST_F(MemorySpaceAssignmentTest, CrossProgramPrefetchTupleNoReuse) {
 
   auto cross_program_prefetches = module->CrossProgramPrefetches();
   EXPECT_EQ(cross_program_prefetches.size(), 1);
-  if (!cross_program_prefetches.empty()) {
-    EXPECT_EQ(cross_program_prefetches[0].parameter, 0);
-    EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({1}));
-  }
+  EXPECT_EQ(cross_program_prefetches[0].parameter, 0);
+  EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({1}));
 
   TF_ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<HloDataflowAnalysis> dataflow_analysis,
@@ -10728,10 +10722,8 @@ TEST_F(MemorySpaceAssignmentTest, CrossProgramPrefetchReuse) {
 
   auto cross_program_prefetches = module->CrossProgramPrefetches();
   EXPECT_EQ(cross_program_prefetches.size(), 1);
-  if (!cross_program_prefetches.empty()) {
-    EXPECT_EQ(cross_program_prefetches[0].parameter, 1);
-    EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({}));
-  }
+  EXPECT_EQ(cross_program_prefetches[0].parameter, 1);
+  EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({}));
 
   TF_ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<HloDataflowAnalysis> dataflow_analysis,
@@ -10788,10 +10780,8 @@ TEST_F(MemorySpaceAssignmentTest, CrossProgramPrefetchTupleReuse) {
 
   auto cross_program_prefetches = module->CrossProgramPrefetches();
   EXPECT_EQ(cross_program_prefetches.size(), 1);
-  if (!cross_program_prefetches.empty()) {
-    EXPECT_EQ(cross_program_prefetches[0].parameter, 0);
-    EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({1}));
-  }
+  EXPECT_EQ(cross_program_prefetches[0].parameter, 0);
+  EXPECT_EQ(cross_program_prefetches[0].index, ShapeIndex({1}));
 
   TF_ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<HloDataflowAnalysis> dataflow_analysis,
