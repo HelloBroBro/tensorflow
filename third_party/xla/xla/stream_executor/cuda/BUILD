@@ -707,7 +707,6 @@ cc_library(
 cc_library(
     name = "ptx_compiler",
     hdrs = ["ptx_compiler.h"],
-    tags = ["cuda-only"],
     deps = select({
         ":libnvptxcompiler_support_enabled": [":ptx_compiler_impl"],
         "//conditions:default": [":ptx_compiler_stub"],
@@ -1458,6 +1457,20 @@ cc_library(
 )
 
 cc_library(
+    name = "mock_compilation_provider",
+    testonly = True,
+    hdrs = ["mock_compilation_provider.h"],
+    deps = [
+        ":compilation_options",
+        ":compilation_provider",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+cc_library(
     name = "subprocess_compilation_provider",
     srcs = ["subprocess_compilation_provider.cc"],
     hdrs = ["subprocess_compilation_provider.h"],
@@ -1479,9 +1492,20 @@ cc_library(
 xla_cc_test(
     name = "compilation_provider_test",
     srcs = ["compilation_provider_test.cc"],
+    args = if_google([
+        # nvjitlink allocates memory and only keeps a pointer past the usual offset of 1024 bytes;
+        # so we need to increase the max pointer offset. -1 means no limit.
+        # This is only relevant for Google's HeapLeakChecker. The newer Leak sanitizer doesn't
+        # have this issue.
+        "--heap_check_max_pointer_offset=-1",
+    ]),
     deps = [
         ":compilation_options",
         ":compilation_provider",
+        ":nvjitlink_compilation_provider",
+        ":nvjitlink_support",
+        ":nvptxcompiler_compilation_provider",
+        ":ptx_compiler_support",
         ":subprocess_compilation",
         ":subprocess_compilation_provider",
         "//xla/stream_executor:device_description",
@@ -1492,6 +1516,108 @@ xla_cc_test(
         "@local_tsl//tsl/platform:env",
         "@local_tsl//tsl/platform:status_matchers",
         "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/platform:test",
+    ],
+)
+
+cc_library(
+    name = "nvjitlink_compilation_provider",
+    srcs = ["nvjitlink_compilation_provider.cc"],
+    hdrs = ["nvjitlink_compilation_provider.h"],
+    deps = [
+        ":compilation_options",
+        ":compilation_provider",
+        ":nvjitlink",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor/gpu:gpu_asm_opts",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@local_tsl//tsl/platform:statusor",
+    ],
+)
+
+cc_library(
+    name = "nvptxcompiler_compilation_provider",
+    srcs = ["nvptxcompiler_compilation_provider.cc"],
+    hdrs = ["nvptxcompiler_compilation_provider.h"],
+    deps = [
+        ":compilation_options",
+        ":compilation_provider",
+        ":ptx_compiler",
+        "//xla/stream_executor:device_description",
+        "//xla/stream_executor/gpu:gpu_asm_opts",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@local_tsl//tsl/platform:statusor",
+    ],
+)
+
+cc_library(
+    name = "composite_compilation_provider",
+    srcs = ["composite_compilation_provider.cc"],
+    hdrs = ["composite_compilation_provider.h"],
+    deps = [
+        ":compilation_options",
+        ":compilation_provider",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+xla_cc_test(
+    name = "composite_compilation_provider_test",
+    srcs = ["composite_compilation_provider_test.cc"],
+    deps = [
+        ":compilation_options",
+        ":compilation_provider",
+        ":composite_compilation_provider",
+        ":mock_compilation_provider",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/status",
+        "@com_google_googletest//:gtest_main",
+        "@local_tsl//tsl/platform:status_matchers",
+        "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/platform:test",
+    ],
+)
+
+cc_library(
+    name = "caching_compilation_provider",
+    srcs = ["caching_compilation_provider.cc"],
+    hdrs = ["caching_compilation_provider.h"],
+    deps = [
+        ":compilation_options",
+        ":compilation_provider",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:node_hash_map",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
+        "@local_tsl//tsl/platform:statusor",
+    ],
+)
+
+xla_cc_test(
+    name = "caching_compilation_provider_test",
+    srcs = ["caching_compilation_provider_test.cc"],
+    deps = [
+        ":caching_compilation_provider",
+        ":compilation_options",
+        ":compilation_provider",
+        ":mock_compilation_provider",
+        "//xla/stream_executor:device_description",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_googletest//:gtest_main",
+        "@local_tsl//tsl/platform:env",
+        "@local_tsl//tsl/platform:status_matchers",
         "@local_tsl//tsl/platform:test",
     ],
 )
