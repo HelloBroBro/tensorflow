@@ -78,10 +78,10 @@ limitations under the License.
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "xla/backends/cpu/codegen/cpu_features.h"
-#include "xla/backends/cpu/codegen/function_library.h"
 #include "xla/backends/cpu/codegen/ir_compiler.h"
 #include "xla/backends/cpu/codegen/jit_compiler.h"
 #include "xla/backends/cpu/codegen/target_machine_features.h"
+#include "xla/backends/cpu/runtime/function_library.h"
 #include "xla/backends/cpu/runtime/thunk.h"
 #include "xla/cpu_function_runtime.h"
 #include "xla/hlo/analysis/hlo_ordering.h"
@@ -1359,7 +1359,7 @@ CpuCompiler::CompileLegacyCpuExecutable(std::unique_ptr<HloModule> module) {
 
   // Options for compiling LLVM IR to machine code.
   IrCompiler::Options ir_compiler_options{
-      /*optimization_level=*/static_cast<int32_t>(CodeGenOptLevel(config)),
+      /*optimization_level=*/CodeGenOptLevel(config),
       /*optimize_for_size=*/options::OptimizeForSizeRequested(config),
       /*fast_math_flags=*/llvm_ir::GetCpuFastMathFlags(config),
       /*disable_expensive_passes=*/
@@ -1393,7 +1393,6 @@ CpuCompiler::CompileLegacyCpuExecutable(std::unique_ptr<HloModule> module) {
   TF_ASSIGN_OR_RETURN(
       JitCompiler jit_compiler,
       JitCompiler::Create(CompilerTargetOptions(module->config()),
-                          CodeGenOptLevel(module->config()),
                           std::move(jit_compiler_options),
                           GetCompilationTaskRunner()));
 
@@ -1925,7 +1924,7 @@ CpuCompiler::CompileAheadOfTime(std::unique_ptr<HloModuleGroup> module_group,
       };
 
       IrCompiler::Options ir_compiler_options = {
-          /*optimization_level=*/static_cast<int>(opt_level),
+          /*optimization_level=*/opt_level,
           /*optimize_for_size=*/
           options::OptimizeForSizeRequested(module->config()),
           /*fast_math_flags=*/llvm_ir::GetCpuFastMathFlags(module->config()),
@@ -2058,7 +2057,7 @@ CpuExecutableAotCompilationResult::LoadExecutable(
 
   // Options for compiling LLVM IR to machine code.
   IrCompiler::Options ir_compiler_options{
-      /*optimization_level=*/static_cast<int32_t>(CodeGenOptLevel(config)),
+      /*optimization_level=*/CodeGenOptLevel(config),
       /*optimize_for_size=*/options::OptimizeForSizeRequested(config),
       /*fast_math_flags=*/llvm_ir::GetCpuFastMathFlags(config),
       /*disable_expensive_passes=*/
@@ -2088,7 +2087,6 @@ CpuExecutableAotCompilationResult::LoadExecutable(
   TF_ASSIGN_OR_RETURN(
       JitCompiler jit_compiler,
       JitCompiler::Create(CompilerTargetOptions(module->config()),
-                          CodeGenOptLevel(module->config()),
                           std::move(jit_compiler_options),
                           /*task_runner=*/nullptr));
 
