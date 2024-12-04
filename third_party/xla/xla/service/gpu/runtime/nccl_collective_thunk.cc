@@ -34,6 +34,8 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
+#include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/backends/gpu/collectives/gpu_collectives.h"
 #include "xla/core/collectives/communicator.h"
 #include "xla/core/collectives/rank_id.h"
 #include "xla/debug_options_flags.h"
@@ -46,7 +48,6 @@ limitations under the License.
 #include "xla/service/gpu/buffer_allocations.h"
 #include "xla/service/gpu/runtime/nccl_api.h"
 #include "xla/service/gpu/runtime/nccl_clique.h"
-#include "xla/service/gpu/runtime/nccl_clique_key.h"
 #include "xla/service/gpu/runtime/thunk.h"
 #include "xla/service/rendezvous.h"
 #include "xla/shape.h"
@@ -62,7 +63,7 @@ namespace gpu {
 namespace {
 
 static constexpr int64_t kCollectiveMemorySpaceColor = 1;
-static constexpr NcclStreamId kNoStreamId = NcclStreamId(0);
+static constexpr CollectiveStreamId kNoStreamId = CollectiveStreamId(0);
 
 bool IsTypeSupportedByNccl(PrimitiveType element_type,
                            Thunk::Kind reduction_op) {
@@ -214,10 +215,10 @@ NcclCollectiveThunk::NcclCollectiveThunk(Kind kind, ThunkInfo thunk_info,
       nccl_api_(nccl_api),
       async_events_(is_sync ? nullptr : new AsyncEvents()) {}
 
-absl::StatusOr<NcclCliqueKey> GetNcclCliqueKey(
+absl::StatusOr<GpuCliqueKey> GetGpuCliqueKey(
     const Thunk::CollectiveExecuteParams& params,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, NcclStreamId stream_id,
+    CollectiveOpGroupMode group_mode, CollectiveStreamId stream_id,
     AsyncStreamKind stream_kind) {
   GlobalDeviceId global_device_id = params.global_device_id;
 
@@ -247,20 +248,20 @@ absl::StatusOr<NcclCliqueKey> GetNcclCliqueKey(
   static const bool enable_per_stream_comms =
       xla::GetDebugOptionsFromFlags().xla_gpu_enable_nccl_per_stream_comms();
 
-  return NcclCliqueKey(std::move(participants),
-                       enable_per_stream_comms ? stream_id : kNoStreamId,
-                       stream_kind, std::move(participant_groups));
+  return GpuCliqueKey(std::move(participants),
+                      enable_per_stream_comms ? stream_id : kNoStreamId,
+                      stream_kind, std::move(participant_groups));
 }
 
-absl::StatusOr<NcclCommHandleWrapper> GetNcclComm(
+absl::StatusOr<CommunicatorHandle> GetNcclComm(
     const Thunk::CollectiveExecuteParams& params,
     const Thunk::CollectiveCliques& collective_cliques,
     const std::vector<ReplicaGroup>& replica_groups,
-    CollectiveOpGroupMode group_mode, NcclStreamId stream_id,
+    CollectiveOpGroupMode group_mode, CollectiveStreamId stream_id,
     AsyncStreamKind stream_kind) {
-  TF_ASSIGN_OR_RETURN(NcclCliqueKey clique_key,
-                      GetNcclCliqueKey(params, replica_groups, group_mode,
-                                       stream_id, stream_kind));
+  TF_ASSIGN_OR_RETURN(GpuCliqueKey clique_key,
+                      GetGpuCliqueKey(params, replica_groups, group_mode,
+                                      stream_id, stream_kind));
 
   std::optional<RankId> rank = clique_key.rank(params.global_device_id);
   TF_ASSIGN_OR_RETURN(bool is_local,
@@ -268,7 +269,7 @@ absl::StatusOr<NcclCommHandleWrapper> GetNcclComm(
   TF_ASSIGN_OR_RETURN(Communicator * comm,
                       collective_cliques.GetComm(std::move(clique_key), *rank));
 
-  return NcclCommHandleWrapper(comm, is_local);
+  return CommunicatorHandle(comm, is_local);
 }
 
 absl::StatusOr<std::vector<DeviceBufferPair>> ConvertToDeviceBuffers(
@@ -378,10 +379,10 @@ absl::StatusOr<se::Event*> NcclCollectiveThunk::AsyncEvents::GetEvent(
 absl::Status NcclCollectiveThunk::Prepare(const PrepareParams& params,
                                           ResourceRequests& resource_requests) {
   TF_ASSIGN_OR_RETURN(
-      NcclCliqueKey clique_key,
-      GetNcclCliqueKey(*params.collective_params, config().replica_groups,
-                       config().group_mode, nccl_stream_id(),
-                       GetAsyncStreamKind()));
+      GpuCliqueKey clique_key,
+      GetGpuCliqueKey(*params.collective_params, config().replica_groups,
+                      config().group_mode, nccl_stream_id(),
+                      GetAsyncStreamKind()));
   TF_ASSIGN_OR_RETURN(
       size_t num_local_participants,
       GetNumLocalParticipants(*params.collective_params,
@@ -397,10 +398,10 @@ absl::Status NcclCollectiveThunk::Initialize(const InitializeParams& params) {
 }
 
 namespace {
-// Wrap NcclCliqueKey into a unique struct to guarantee we do not accidentally
+// Wrap GpuCliqueKey into a unique struct to guarantee we do not accidentally
 // try to run multiple unrelated rendezvous for a same key.
 struct FirstCallRendezvousKey {
-  NcclCliqueKey clique_key;
+  GpuCliqueKey clique_key;
 
   template <typename H>
   friend H AbslHashValue(H h, const FirstCallRendezvousKey& key) {
@@ -417,10 +418,10 @@ bool operator==(const FirstCallRendezvousKey& a,
 absl::Status NcclCollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
   VLOG(1) << absl::StreamFormat("Starting %s %s.", IsAsync() ? "async" : "sync",
                                 Thunk::KindToString(kind()));
-  const NcclStreamId stream_id = nccl_stream_id();
+  const CollectiveStreamId stream_id = nccl_stream_id();
   AsyncStreamKind stream_kind = GetAsyncStreamKind();
   TF_ASSIGN_OR_RETURN(
-      NcclCommHandleWrapper comm_handle,
+      CommunicatorHandle comm_handle,
       GetNcclComm(*params.collective_params, *params.collective_cliques,
                   config().replica_groups, config().group_mode, stream_id,
                   stream_kind));
@@ -452,9 +453,9 @@ absl::Status NcclCollectiveThunk::ExecuteOnStream(const ExecuteParams& params) {
   // ahead on one rank leads to deadlocks in NCCL.
   if (NeedFirstCallRendzevous() && !first_call_rendezvous_flag_.IsCompleted()) {
     TF_ASSIGN_OR_RETURN(
-        NcclCliqueKey clique_key,
-        GetNcclCliqueKey(*params.collective_params, config().replica_groups,
-                         config().group_mode, stream_id, stream_kind));
+        GpuCliqueKey clique_key,
+        GetGpuCliqueKey(*params.collective_params, config().replica_groups,
+                        config().group_mode, stream_id, stream_kind));
 
     TF_ASSIGN_OR_RETURN(
         size_t num_local_participants,

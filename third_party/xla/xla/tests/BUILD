@@ -162,8 +162,8 @@ cc_library(
     hdrs = ["hlo_test_base.h"],
     deps = [
         ":filecheck",
+        ":hlo_runner_agnostic_test_base",
         ":literal_test_util",
-        ":new_hlo_test_base",
         ":pjrt_client_registry",
         ":test_utils",
         ":verified_hlo_module",
@@ -212,10 +212,10 @@ cc_library(
 )
 
 cc_library(
-    name = "new_hlo_test_base",
+    name = "hlo_runner_agnostic_test_base",
     testonly = True,
-    srcs = ["new_hlo_test_base.cc"],
-    hdrs = ["new_hlo_test_base.h"],
+    srcs = ["hlo_runner_agnostic_test_base.cc"],
+    hdrs = ["hlo_runner_agnostic_test_base.h"],
     deps = [
         ":filecheck",
         ":literal_test_util",
@@ -690,6 +690,7 @@ xla_test(
         ":literal_test_util",
         ":test_macros_header",
         ":xla_internal_test_main",
+        "//xla:types",
         "//xla/client:global_data",
         "//xla/client:local_client",
         "//xla/hlo/builder:xla_builder",

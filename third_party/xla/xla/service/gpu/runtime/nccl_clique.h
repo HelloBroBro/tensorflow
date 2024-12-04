@@ -25,14 +25,16 @@ limitations under the License.
 #include <utility>
 
 #include "absl/container/btree_map.h"
-#include "absl/functional/function_ref.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
+#include "xla/backends/gpu/collectives/gpu_clique.h"
+#include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/core/collectives/clique_id.h"
 #include "xla/core/collectives/communicator.h"
 #include "xla/core/collectives/rank_id.h"
 #include "xla/executable_run_options.h"
-#include "xla/service/gpu/runtime/nccl_clique_key.h"
+#include "xla/service/gpu/gpu_executable_run_options.h"
 #include "xla/service/lockable.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/types.h"  // IWYU pragma: keep
@@ -53,7 +55,7 @@ namespace xla::gpu {
 // participating devices and properties of collective operations launched on
 // them, e.g. mixing NCCL operations launched from CUDA graphs with regularly
 // launched operations is prone to dead locks, and we keep them separate. See
-// NcclCliqueKey for details.
+// GpuCliqueKey for details.
 //
 // https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/communicators.html#using-multiple-nccl-communicators-concurrently
 
@@ -66,97 +68,40 @@ bool IsGlobalNcclConfig();
 
 // Returns a clique id callback passed as an argument if it's not null or a
 // default callback to get create a clique id if we are running in local mode.
-absl::StatusOr<const NcclCliqueIdCallback*> GetNcclCliqueIdCallback(
-    const NcclCliqueIdCallback* clique_id_callback,  // may be null
+absl::StatusOr<const CliqueIdCallback*> GetCliqueIdCallback(
+    const CliqueIdCallback* clique_id_callback,  // may be null
     bool is_local);
 
 //===----------------------------------------------------------------------===//
 // NcclClique
 //===----------------------------------------------------------------------===//
 
-// A group of NCCL communicators making up a clique. With NCCL it's notoriously
-// easy to get a deadlock, so we take extra care by grouping communicators into
-// cliques and making sure that we have a well defined order of all collective
-// operations that does not lead to deadlocks.
-class NcclCliqueCommunicators {
- public:
-  class AsyncErrorChecker {
-   public:
-    absl::Status Check();
-
-   private:
-    friend class NcclCliqueCommunicators;
-
-    explicit AsyncErrorChecker(NcclCliqueCommunicators& comms)
-        : communicators_(comms) {}
-
-    NcclCliqueCommunicators& communicators_;
-  };
-
-  NcclCliqueCommunicators(
-      NcclCliqueKey clique_key, std::optional<NcclCliqueId> clique_id,
-      absl::btree_map<RankId, std::unique_ptr<Communicator>> communicators);
-
-  // Returns a NCCL communicator for a given rank if it's in a clique.
-  std::optional<Communicator*> comm(RankId rank);
-
-  // Return true if clique is local: all communicators belong to current
-  // process. Non-local cliques spans multiple processes (typically hosts).
-  bool IsLocal() const;
-
-  // Calls `fn` for each communicator in the clique.
-  void ForEachComm(absl::FunctionRef<void(RankId, Communicator*)> fn);
-
-  const NcclCliqueKey& clique_key() const { return clique_key_; }
-  const std::optional<NcclCliqueId>& clique_id() const { return clique_id_; }
-  size_t num_communicators() const { return communicators_.size(); }
-
-  std::string DebugString() const;
-
-  AsyncErrorChecker GetChecker() { return AsyncErrorChecker(*this); }
-
- private:
-  NcclCliqueKey clique_key_;
-  std::optional<NcclCliqueId> clique_id_;
-
-  // TODO(ezhulenev): Switch this map to GlobalDeviceId key.
-  absl::btree_map<RankId, std::unique_ptr<Communicator>> communicators_;
-};
-
 struct NcclCliqueName {
-  static std::string ToString(const NcclCliqueCommunicators& comms) {
-    return absl::StrFormat("lockable clique %s", comms.clique_key().ToString());
+  static std::string ToString(const GpuClique& clique) {
+    return absl::StrFormat("lockable clique %s", clique.key().ToString());
   }
 };
 
-class NcclClique : public Lockable<NcclCliqueCommunicators, NcclCliqueName> {
+class NcclClique : public Lockable<GpuClique, NcclCliqueName> {
  public:
   // We keep acquired cliques in a sorted container to guarantee that all
   // participants iterate over cliques in the same order.
   using AcquiredCliquesMap =
-      absl::btree_map<NcclCliqueKey, std::shared_ptr<NcclClique::Lock>,
-                      std::greater<NcclCliqueKey>>;
+      absl::btree_map<GpuCliqueKey, std::shared_ptr<NcclClique::Lock>,
+                      std::greater<GpuCliqueKey>>;
 
   // Construct the lockable clique.
-  // Note that async errors can be checked without acquiring the lock.
-  // To get the lock-free reference to the communicators for the async
-  // error checks, the constructor intentionally leaks the reference
-  // to the communicators from an acquired lock.
   NcclClique(
-      NcclCliqueKey clique_key, std::optional<NcclCliqueId> clique_id,
+      GpuCliqueKey clique_key, std::optional<CliqueId> clique_id,
       absl::btree_map<RankId, std::unique_ptr<Communicator>> communicators)
-      : Lockable(std::move(clique_key), clique_id, std::move(communicators)),
-        async_error_checker_(Acquire()->GetChecker()) {}
+      : Lockable(std::move(clique_key), clique_id, std::move(communicators)) {}
 
   std::string DebugString() const;
 
   // Checks for async errors for all the communicators in the clique without
   // taking the lock. If at least one of the communicators has an async error,
   // it returns one of the errors.
-  absl::Status CheckAsyncErrors();
-
- private:
-  NcclCliqueCommunicators::AsyncErrorChecker async_error_checker_;
+  absl::Status HealthCheck() const;
 };
 
 // Acquires an shared access to a NCCL clique (NcclClique::Lock collectively
@@ -167,8 +112,8 @@ class NcclClique : public Lockable<NcclCliqueCommunicators, NcclCliqueName> {
 // created communicators or maybe created by splitting of the already acquired
 // cliques.
 absl::StatusOr<std::shared_ptr<NcclClique::Lock>> AcquireNcclClique(
-    se::StreamExecutor* device, RunId run_id, NcclCliqueKey clique_key,
-    const NcclCliqueIdCallback& clique_id_callback, RankId rank,
+    se::StreamExecutor* device, RunId run_id, GpuCliqueKey clique_key,
+    const CliqueIdCallback& clique_id_callback, RankId rank,
     size_t num_local_participants,
     const NcclClique::AcquiredCliquesMap& acquired_cliques,
     int64_t max_nchannels = 0);

@@ -42,11 +42,11 @@ limitations under the License.
 #include "absl/types/span.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Argument.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -54,6 +54,7 @@ limitations under the License.
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Linker/Linker.h"
+#include "llvm/Support/Casting.h"
 #include "mlir/AsmParser/AsmParser.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
@@ -68,6 +69,7 @@ limitations under the License.
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "xla/backends/gpu/collectives/gpu_clique_key.h"
 #include "xla/ffi/api/c_api.h"
 #include "xla/ffi/attribute_map.h"
 #include "xla/ffi/ffi_api.h"
@@ -80,6 +82,7 @@ limitations under the License.
 #include "xla/layout.h"
 #include "xla/layout_util.h"
 #include "xla/literal.h"
+#include "xla/mlir/utils/error_util.h"
 #include "xla/mlir_hlo/transforms/gpu_passes.h"
 #include "xla/primitive_util.h"
 #include "xla/service/buffer_assignment.h"
@@ -114,6 +117,7 @@ limitations under the License.
 #include "xla/service/gpu/runtime/conditional_thunk.h"
 #include "xla/service/gpu/runtime/convolution_thunk.h"
 #include "xla/service/gpu/runtime/copy_thunk.h"
+#include "xla/service/gpu/runtime/custom_call_target.h"
 #include "xla/service/gpu/runtime/custom_call_thunk.h"
 #include "xla/service/gpu/runtime/fft_thunk.h"
 #include "xla/service/gpu/runtime/gemm_thunk.h"
@@ -124,8 +128,6 @@ limitations under the License.
 #include "xla/service/gpu/runtime/nccl_all_reduce_thunk.h"
 #include "xla/service/gpu/runtime/nccl_all_to_all_thunk.h"
 #include "xla/service/gpu/runtime/nccl_api.h"
-#include "xla/service/gpu/runtime/nccl_clique.h"
-#include "xla/service/gpu/runtime/nccl_clique_key.h"
 #include "xla/service/gpu/runtime/nccl_collective_broadcast_thunk.h"
 #include "xla/service/gpu/runtime/nccl_collective_permute_thunk.h"
 #include "xla/service/gpu/runtime/nccl_collective_thunk.h"
@@ -146,7 +148,6 @@ limitations under the License.
 #include "xla/service/llvm_ir/buffer_assignment_util.h"
 #include "xla/service/llvm_ir/ir_array.h"
 #include "xla/service/llvm_ir/kernel_support_library.h"
-#include "xla/service/llvm_ir/llvm_loop.h"
 #include "xla/service/llvm_ir/llvm_util.h"
 #include "xla/service/llvm_ir/loop_emitter.h"
 #include "xla/service/llvm_ir/sort_util.h"
@@ -157,6 +158,7 @@ limitations under the License.
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/gpu/gpu_blas_lt.h"
 #include "xla/stream_executor/launch_dim.h"
+#include "xla/stream_executor/stream.h"
 #include "xla/tsl/protobuf/dnn.pb.h"
 #include "xla/util.h"
 #include "xla/xla_data.pb.h"
@@ -1145,26 +1147,25 @@ absl::Status IrEmitterUnnested::EmitCustomCallThunk(
   // xla/g3doc/custom_call.md.
   switch (instr->api_version()) {
     case CustomCallApiVersion::API_VERSION_ORIGINAL:
-      using original_call_type =
-          void (*)(CustomCallThunk::Stream /*stream*/, void** /*buffers*/,
-                   const char* /*opaque*/, size_t /*opaque_len*/);
-      custom_call_target = [call_target](CustomCallThunk::Stream stream,
+      custom_call_target = [call_target](stream_executor::Stream* stream,
                                          void** buffers, const char* opaque,
                                          size_t opaque_len,
                                          XlaCustomCallStatus*) {
-        auto typed_call_target =
-            reinterpret_cast<original_call_type>(call_target);
-        typed_call_target(stream, buffers, opaque, opaque_len);
+        reinterpret_cast<CustomCallWithOpaqueStreamHandle>(call_target)(
+            stream->platform_specific_handle().stream, buffers, opaque,
+            opaque_len);
       };
       break;
     case CustomCallApiVersion::API_VERSION_STATUS_RETURNING:
     case CustomCallApiVersion::API_VERSION_STATUS_RETURNING_UNIFIED:
-      using status_returning_call_type =
-          void (*)(CustomCallThunk::Stream /*stream*/, void** /*buffers*/,
-                   const char* /*opaque*/, size_t /*opaque_len*/,
-                   XlaCustomCallStatus* /*status*/);
-      custom_call_target =
-          reinterpret_cast<status_returning_call_type>(call_target);
+      custom_call_target = [call_target](stream_executor::Stream* stream,
+                                         void** buffers, const char* opaque,
+                                         size_t opaque_len,
+                                         XlaCustomCallStatus* status) {
+        reinterpret_cast<CustomCallWithStatusAndOpaqueStreamHandle>(
+            call_target)(stream->platform_specific_handle().stream, buffers,
+                         opaque, opaque_len, status);
+      };
       break;
     case CustomCallApiVersion::API_VERSION_TYPED_FFI:
       // We already checked `handler` above.
@@ -1380,9 +1381,19 @@ absl::Status IrEmitterUnnested::EmitTritonCustomCall(
         ir_emitter_context_->name_uniquer()->GetUniqueName(call.name);
     VLOG(3) << "Generating: " << kernel_name;
 
-    auto triton_module =
-        mlir::parseSourceString<mlir::ModuleOp>(call.ir, &mlir_context);
-    TF_RET_CHECK(triton_module) << "Failed to parse Triton module: " << call.ir;
+    mlir::OwningOpRef<mlir::ModuleOp> triton_module;
+    {
+      mlir::BaseScopedDiagnosticHandler diagnostic_handler(&mlir_context);
+      triton_module =
+          mlir::parseSourceString<mlir::ModuleOp>(call.ir, &mlir_context);
+      if (!triton_module) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Failed to parse Triton module: ",
+                         diagnostic_handler.ConsumeStatus().message(),
+                         "\ninput ir: ", call.ir));
+      }
+    }
+
     auto triton_fn =
         triton_module->lookupSymbol<mlir::triton::FuncOp>(call.name);
     TF_RET_CHECK(triton_fn)
@@ -1448,6 +1459,16 @@ absl::Status IrEmitterUnnested::EmitTritonCustomCall(
       for (const auto& [arg, input] : llvm::zip(impl_fn->args(), inputs)) {
         arg.replaceAllUsesWith(input.GetBasePointer());
       }
+      // Triton's kernel ABI expects an additional scratchpad global memory.
+      // For now it is only used for on-device creation of TMA descriptors,
+      // which we do not use yet, so we are just replacing this argument with a
+      // null pointer.
+      // TODO: b/381242007 - Allocate a proper buffer if we want to use
+      // device-side TMA APIs.
+      auto scratchpad_arg = impl_fn->getArg(impl_fn->arg_size() - 1);
+      scratchpad_arg->replaceAllUsesWith(llvm::ConstantPointerNull::get(
+          llvm::cast<llvm::PointerType>(scratchpad_arg->getType())));
+
       impl_fn->eraseFromParent();
 
       for (auto& arg : prototype_func->args()) {

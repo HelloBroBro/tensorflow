@@ -31,12 +31,13 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/types/span.h"
+#include "xla/backends/gpu/collectives/gpu_clique_key.h"
 #include "xla/backends/gpu/collectives/nccl_communicator.h"
+#include "xla/core/collectives/clique_id.h"
 #include "xla/core/collectives/communicator.h"
 #include "xla/core/collectives/rank_id.h"
 #include "xla/primitive_util.h"
 #include "xla/service/collective_ops_utils.h"
-#include "xla/service/gpu/runtime/nccl_clique_key.h"
 #include "xla/stream_executor/device_memory.h"
 #include "xla/stream_executor/device_memory_allocator.h"
 #include "xla/stream_executor/gpu/gpu_stream.h"
@@ -291,22 +292,15 @@ ScopedPersistentPlanAllocator::~ScopedPersistentPlanAllocator() {
 // itself. It is available only if NCCL + CUDA are configured at compile time.
 class DefaultNcclApi final : public NcclApi {
  public:
-  absl::StatusOr<NcclCliqueId> GetUniqueId() final;
+  absl::StatusOr<CliqueId> GetUniqueId() final;
 
   absl::StatusOr<std::vector<std::unique_ptr<Communicator>>> CommInitRanks(
-      int32_t nranks, const NcclCliqueId& clique_id,
+      int32_t nranks, const CliqueId& clique_id,
       absl::Span<const DeviceRank> ranks, const Config& config) final;
 
   absl::StatusOr<std::vector<std::unique_ptr<Communicator>>> CommSplit(
       absl::Span<const Communicator* const> comms, int32_t color,
       absl::Span<const RankId> keys, std::optional<Config> config) final;
-
-  absl::Status CommAbort(Communicator* comm) final;
-  absl::Status CommFinalize(Communicator* comm) final;
-
-  absl::StatusOr<int32_t> CommCount(Communicator* comm) final;
-
-  absl::Status CommGetAsyncError(Communicator* comm) final;
 
   absl::Status GroupStart() final;
   absl::Status GroupEnd() final;
@@ -358,8 +352,7 @@ NcclApi* NcclApi::Default() {
 
 bool NcclApi::HasNcclSupport() { return true; }
 
-static absl::StatusOr<ncclUniqueId> AsNcclUniqueId(
-    const NcclCliqueId& clique_id) {
+static absl::StatusOr<ncclUniqueId> AsNcclUniqueId(const CliqueId& clique_id) {
   if (clique_id.size() != NCCL_UNIQUE_ID_BYTES) {
     return Internal(
         "CliqueId size is not equal to NCCL_UNIQUE_ID_BYTES: %d vs %d",
@@ -370,15 +363,15 @@ static absl::StatusOr<ncclUniqueId> AsNcclUniqueId(
   return id;
 }
 
-absl::StatusOr<NcclCliqueId> DefaultNcclApi::GetUniqueId() {
+absl::StatusOr<CliqueId> DefaultNcclApi::GetUniqueId() {
   VLOG(3) << "Get NCCL unique id";
   ncclUniqueId id;
   XLA_NCCL_RETURN_IF_ERROR(ncclGetUniqueId(&id));
-  return NcclCliqueId(std::string_view(id.internal, NCCL_UNIQUE_ID_BYTES));
+  return CliqueId(std::string_view(id.internal, NCCL_UNIQUE_ID_BYTES));
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<Communicator>>>
-DefaultNcclApi::CommInitRanks(int32_t nranks, const NcclCliqueId& clique_id,
+DefaultNcclApi::CommInitRanks(int32_t nranks, const CliqueId& clique_id,
                               absl::Span<const DeviceRank> ranks,
                               const Config& config) {
   VLOG(1) << "Initialize NCCL communicator for " << ranks.size()
@@ -481,35 +474,6 @@ DefaultNcclApi::CommSplit(absl::Span<const Communicator* const> comms,
       absl::StrFormat("%s:%d: NCCL operation ncclCommSplit not implemented",
                       __FILE__, __LINE__));
 #endif  // !defined(TENSORFLOW_USE_ROCM) || TF_ROCM_VERSION >= 60000
-}
-
-absl::Status DefaultNcclApi::CommAbort(Communicator* comm) {
-  VLOG(1) << "Abort NCCL communicator: " << comm;
-  return XLA_NCCL_STATUS(ncclCommAbort(Cast(comm)));
-}
-
-absl::Status DefaultNcclApi::CommFinalize(Communicator* comm) {
-  VLOG(1) << "Finalize NCCL communicator: " << comm;
-  return XLA_NCCL_STATUS(ncclCommFinalize(Cast(comm)));
-}
-
-absl::StatusOr<int32_t> DefaultNcclApi::CommCount(Communicator* comm) {
-  VLOG(5) << "Get the number of ranks in NCCL communicator: " << comm;
-  int32_t count;
-  XLA_NCCL_RETURN_IF_ERROR(ncclCommCount(Cast(comm), &count));
-  return count;
-}
-
-absl::Status DefaultNcclApi::CommGetAsyncError(Communicator* comm) {
-  VLOG(5) << "Get last async error for NCCL communicator: " << comm;
-
-  ncclResult_t async_err;
-  XLA_NCCL_RETURN_IF_ERROR(ncclCommGetAsyncError(Cast(comm), &async_err));
-  if (async_err == ncclSuccess) return absl::OkStatus();
-
-  return absl::InternalError(absl::StrCat(
-      ncclGetErrorString(async_err),
-      ". Last NCCL error (maybe unrelated): ", ncclGetLastError(Cast(comm))));
 }
 
 absl::Status DefaultNcclApi::GroupStart() {

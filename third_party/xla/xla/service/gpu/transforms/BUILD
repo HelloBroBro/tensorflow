@@ -12,7 +12,10 @@ load(
 
 package(
     # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
-    default_visibility = ["//xla/service/gpu:__subpackages__"],
+    default_visibility = [
+        "//xla/service/gpu:__subpackages__",
+        "//xla/tools/hlo_opt:__subpackages__",
+    ],
     licenses = ["notice"],
 )
 
@@ -2846,12 +2849,13 @@ cc_library(
     visibility = ["//xla/service/gpu:__subpackages__"] + if_google(["//learning/brain/engprod/xwatch:__subpackages__"]),
     deps = [
         "//xla:comparison_util",
+        "//xla:literal_util",
         "//xla:shape_util",
         "//xla:util",
         "//xla:xla_data_proto_cc",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/pass:hlo_pass",
-        "//xla/hlo/transforms:stable_sort_expander",
+        "//xla/service:pattern_matcher",
         "//xla/service/gpu:cublas_cudnn",
         "//xla/service/gpu/runtime:cub_sort_thunk",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -3341,5 +3345,46 @@ xla_cc_test(
         "@local_tsl//tsl/platform:protobuf",
         "@local_tsl//tsl/platform:status_matchers",
         "@local_tsl//tsl/platform:statusor",
+    ],
+)
+
+cc_library(
+    name = "ragged_all_to_all_decomposer",
+    srcs = ["ragged_all_to_all_decomposer.cc"],
+    hdrs = ["ragged_all_to_all_decomposer.h"],
+    deps = [
+        "//xla:comparison_util",
+        "//xla:literal_util",
+        "//xla:shape_util",
+        "//xla:util",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/pass:hlo_pass",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@local_tsl//tsl/platform:errors",
+    ],
+)
+
+xla_cc_test(
+    name = "ragged_all_to_all_decomposer_test",
+    srcs = ["ragged_all_to_all_decomposer_test.cc"],
+    deps = [
+        ":ragged_all_to_all_decomposer",
+        "//xla/hlo/ir:hlo",
+        "//xla/hlo/testlib:filecheck",
+        "//xla/service:hlo_cse",
+        "//xla/service:hlo_runner",
+        "//xla/service:platform_util",
+        "//xla/tests:hlo_runner_agnostic_test_base",
+        "//xla/tests:test_utils",
+        "//xla/tsl/lib/core:status_test_util",
+        "@com_google_absl//absl/log",
+        "@com_google_googletest//:gtest",
+        "@com_google_googletest//:gtest_main",
+        "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/platform:test",
     ],
 )
