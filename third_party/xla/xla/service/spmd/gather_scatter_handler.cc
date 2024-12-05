@@ -294,6 +294,17 @@ absl::StatusOr<HloInstruction*> PartitionGatherIndexPassthroughDimensions(
   const hlo_sharding_util::GatherScatterDims index_passthrough_dims =
       hlo_sharding_util::GetGatherScatterIndexPassThroughDims(
           *gather, visitor->call_graph());
+
+  // Improve indices sharding from the output sharding.
+  HloSharding indices_sharding = indices.sharding();
+  if (hlo_sharding_util::MergeShardingIfCompatible(
+          hlo_sharding_util::PropagateShardingAlongDimsAndReplicateOthers(
+              output_sharding, index_passthrough_dims.output_dims,
+              index_passthrough_dims.indices_dims, indices.rank()),
+          &indices_sharding)) {
+    indices = indices.Reshard(indices_sharding);
+  }
+
   // Compute output sharding.
   HloSharding passthrough_sharding =
       hlo_sharding_util::PropagateShardingAlongDimsAndReplicateOthers(
@@ -623,16 +634,9 @@ absl::StatusOr<HloInstruction*> PartitionGatherParallelDimensions(
   const auto output_parallel_dims = parallel_dims.output_dims;
   operand = operand.Reshard(gather_sharding->operand_sharding);
   indices = indices.Reshard(gather_sharding->indices_sharding);
-  HloSharding gather_output_sharding = hlo_sharding_util::
-      GatherOutputOrScatterUpdateShardingFromIndicesParallelDimensions(
-          indices.sharding(), output_shape.rank(), indices_parallel_dims,
-          output_parallel_dims);
-  if (!need_offset) {
-    hlo_sharding_util::MergeShardingIfCompatible(
-        hlo_sharding_util::GatherOutputShardingFromIndex(indices.sharding(),
-                                                         gather),
-        &gather_output_sharding);
-  }
+  HloSharding gather_output_sharding =
+      hlo_sharding_util::GatherOutputShardingFromIndex(indices.sharding(),
+                                                       gather);
 
   // Refine output sharding from the operand. it should be inferred from
   // operand sharding, so that the partitioned gather can be either 1)
@@ -1103,16 +1107,9 @@ absl::StatusOr<HloInstruction*> PartitionScatterParallelDimensions(
     operand = operand.Reshard(scatter_sharding->operand_sharding);
   }
   indices = indices.Reshard(scatter_sharding->indices_sharding);
-  HloSharding update_sharding = hlo_sharding_util::
-      GatherOutputOrScatterUpdateShardingFromIndicesParallelDimensions(
-          indices.sharding(), updates[0].rank(), indices_parallel_dims,
-          update_parallel_dims);
-  if (!need_offset) {
-    hlo_sharding_util::MergeShardingIfCompatible(
-        hlo_sharding_util::ScatterUpdateShardingFromIndex(indices.sharding(),
-                                                          scatter),
-        &update_sharding);
-  }
+  HloSharding update_sharding =
+      hlo_sharding_util::ScatterUpdateShardingFromIndex(indices.sharding(),
+                                                        scatter);
 
   // Refine update sharding from the operand. it should be inferred from
   // operand sharding, so that the partitioned scatter can be either 1)
@@ -1378,10 +1375,21 @@ absl::StatusOr<HloInstruction*> PartitionScatterIndexPassthroughDimensions(
 
   SpmdBuilder* b = visitor->builder();
   // Parse non-variadic computation only. Variadic case will be replicated.
-  const HloSharding original_indices_sharding = indices.sharding();
   const hlo_sharding_util::GatherScatterDims index_passthrough_dims =
       hlo_sharding_util::GetGatherScatterIndexPassThroughDims(
           *scatter, visitor->call_graph());
+
+  // Improve indices sharding from the update sharding.
+  HloSharding indices_sharding = indices.sharding();
+  if (hlo_sharding_util::MergeShardingIfCompatible(
+          hlo_sharding_util::PropagateShardingAlongDimsAndReplicateOthers(
+              updates[0].sharding(), index_passthrough_dims.output_dims,
+              index_passthrough_dims.indices_dims, indices.rank()),
+          &indices_sharding)) {
+    indices = indices.Reshard(indices_sharding);
+  }
+  const HloSharding original_indices_sharding = indices.sharding();
+
   HloSharding passthrough_sharding =
       hlo_sharding_util::PropagateShardingAlongDimsAndReplicateOthers(
           indices.sharding(), index_passthrough_dims.indices_dims,

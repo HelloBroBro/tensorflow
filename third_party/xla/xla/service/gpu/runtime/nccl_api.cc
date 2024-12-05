@@ -32,6 +32,7 @@ limitations under the License.
 #include "absl/strings/str_join.h"
 #include "absl/types/span.h"
 #include "xla/backends/gpu/collectives/gpu_clique_key.h"
+#include "xla/backends/gpu/collectives/nccl_collectives.h"
 #include "xla/backends/gpu/collectives/nccl_communicator.h"
 #include "xla/core/collectives/clique_id.h"
 #include "xla/core/collectives/communicator.h"
@@ -290,20 +291,11 @@ ScopedPersistentPlanAllocator::~ScopedPersistentPlanAllocator() {
 
 // This a default NCCL API implementation that forwards all API calls to NCCL
 // itself. It is available only if NCCL + CUDA are configured at compile time.
-class DefaultNcclApi final : public NcclApi {
+class DefaultNcclApi final : public NcclCollectives {
  public:
-  absl::StatusOr<CliqueId> GetUniqueId() final;
-
-  absl::StatusOr<std::vector<std::unique_ptr<Communicator>>> CommInitRanks(
-      int32_t nranks, const CliqueId& clique_id,
-      absl::Span<const DeviceRank> ranks, const Config& config) final;
-
   absl::StatusOr<std::vector<std::unique_ptr<Communicator>>> CommSplit(
       absl::Span<const Communicator* const> comms, int32_t color,
       absl::Span<const RankId> keys, std::optional<Config> config) final;
-
-  absl::Status GroupStart() final;
-  absl::Status GroupEnd() final;
 
   absl::Status AllReduce(se::DeviceMemoryBase send_buffer,
                          se::DeviceMemoryBase recv_buffer, PrimitiveType dtype,
@@ -361,57 +353,6 @@ static absl::StatusOr<ncclUniqueId> AsNcclUniqueId(const CliqueId& clique_id) {
   ncclUniqueId id;
   absl::c_copy(clique_id.data(), id.internal);
   return id;
-}
-
-absl::StatusOr<CliqueId> DefaultNcclApi::GetUniqueId() {
-  VLOG(3) << "Get NCCL unique id";
-  ncclUniqueId id;
-  XLA_NCCL_RETURN_IF_ERROR(ncclGetUniqueId(&id));
-  return CliqueId(std::string_view(id.internal, NCCL_UNIQUE_ID_BYTES));
-}
-
-absl::StatusOr<std::vector<std::unique_ptr<Communicator>>>
-DefaultNcclApi::CommInitRanks(int32_t nranks, const CliqueId& clique_id,
-                              absl::Span<const DeviceRank> ranks,
-                              const Config& config) {
-  VLOG(1) << "Initialize NCCL communicator for " << ranks.size()
-          << " devices; fingerprint(id)=" << clique_id.fingerprint();
-
-  ncclConfig_t comm_config = NCCL_CONFIG_INITIALIZER;
-#if !defined(TENSORFLOW_USE_ROCM) || TF_ROCM_VERSION > 50700
-  comm_config.splitShare = config.split_share;
-#endif
-  if (config.max_nchannels > 0) {
-    comm_config.maxCTAs = config.max_nchannels;
-    VLOG(1) << "Maximum number of channels for fingerprint(id)="
-            << clique_id.fingerprint() << " is set to: " << comm_config.maxCTAs;
-  }
-
-  std::vector<ncclComm_t> comm_handles;
-  std::vector<std::unique_ptr<Communicator>> comms;
-
-  comm_handles.resize(ranks.size(), nullptr);
-  comms.reserve(ranks.size());
-
-  TF_RETURN_IF_ERROR(GroupStart());
-  for (size_t i = 0; i < ranks.size(); ++i) {
-    VLOG(1) << "Initialize NCCL communicator for rank #" << ranks[i].rank
-            << " of " << nranks
-            << "; fingerprint(id)=" << clique_id.fingerprint();
-    auto activate_context = ranks[i].device->Activate();
-
-    TF_ASSIGN_OR_RETURN(auto nccl_unique_id, AsNcclUniqueId(clique_id));
-    XLA_NCCL_RETURN_IF_ERROR(
-        ncclCommInitRankConfig(&comm_handles[i], nranks, nccl_unique_id,
-                               ranks[i].rank.value(), &comm_config));
-  }
-  TF_RETURN_IF_ERROR(GroupEnd());
-
-  for (ncclComm_t comm_handle : comm_handles) {
-    comms.emplace_back(std::make_unique<NcclCommunicator>(comm_handle));
-  }
-
-  return comms;
 }
 
 absl::StatusOr<std::vector<std::unique_ptr<Communicator>>>
@@ -474,16 +415,6 @@ DefaultNcclApi::CommSplit(absl::Span<const Communicator* const> comms,
       absl::StrFormat("%s:%d: NCCL operation ncclCommSplit not implemented",
                       __FILE__, __LINE__));
 #endif  // !defined(TENSORFLOW_USE_ROCM) || TF_ROCM_VERSION >= 60000
-}
-
-absl::Status DefaultNcclApi::GroupStart() {
-  VLOG(5) << "Start NCCL group";
-  return XLA_NCCL_STATUS(ncclGroupStart());
-}
-
-absl::Status DefaultNcclApi::GroupEnd() {
-  VLOG(5) << "End NCCL group";
-  return XLA_NCCL_STATUS(ncclGroupEnd());
 }
 
 absl::Status DefaultNcclApi::AllReduce(se::DeviceMemoryBase send_buffer,

@@ -22,6 +22,7 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/types/span.h"
+#include "xla/backends/gpu/collectives/gpu_collectives_stub.h"
 #include "xla/core/collectives/clique_id.h"
 #include "xla/core/collectives/communicator.h"
 #include "xla/core/collectives/rank_id.h"
@@ -80,28 +81,13 @@ ScopedPersistentPlanAllocator::~ScopedPersistentPlanAllocator() = default;
 // NcclApiStub
 //===----------------------------------------------------------------------===//
 
-static absl::Status UnimplementedError() {
-  return absl::UnimplementedError("XLA compiled without NCCL support");
-}
-
-class NcclApiStub final : public NcclApi {
+class NcclApiStub final : public GpuCollectivesStub {
  public:
-  absl::StatusOr<CliqueId> GetUniqueId() final { return UnimplementedError(); }
-
-  absl::StatusOr<std::vector<std::unique_ptr<Communicator>>> CommInitRanks(
-      int32_t, const CliqueId&, absl::Span<const DeviceRank>,
-      const Config&) final {
-    return UnimplementedError();
-  }
-
   absl::StatusOr<std::vector<std::unique_ptr<Communicator>>> CommSplit(
       absl::Span<const Communicator* const>, int32_t, absl::Span<const RankId>,
       std::optional<Config>) final {
     return UnimplementedError();
   }
-
-  absl::Status GroupStart() final { return UnimplementedError(); }
-  absl::Status GroupEnd() final { return UnimplementedError(); }
 
   absl::Status AllReduce(se::DeviceMemoryBase, se::DeviceMemoryBase,
                          PrimitiveType, size_t, ReductionKind, Communicator*,

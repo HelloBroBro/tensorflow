@@ -425,7 +425,11 @@ ShapeUtil::MakeShapeWithDescendingLayoutAndSamePhysicalLayout(
         shape.layout().tail_padding_alignment_in_elements());
   }
   for (int i = 0; i < shape.dimensions_size(); ++i) {
-    new_shape.set_dynamic_dimension(i, shape.is_dynamic_dimension(i));
+    int dim = i;
+    if (shape.has_layout()) {
+      dim = LayoutUtil::Major(shape.layout(), dim);
+    }
+    new_shape.set_dynamic_dimension(i, shape.is_dynamic_dimension(dim));
   }
   new_shape.mutable_layout()->set_memory_space(shape.layout().memory_space());
   return new_shape;
@@ -1751,6 +1755,26 @@ ShapeUtil::DecomposeBitcastToTrt(const Shape& input_shape,
       << " and output_shape_with_layout: "
       << ShapeUtil::HumanStringWithLayout(output_shape_with_layout);
   return output_shape_with_layout;
+}
+
+/* static */ Shape ShapeUtil::ReorderLogicalDimensions(
+    const Shape& shape, absl::Span<const int64_t> permutation) {
+  CHECK(shape.IsArray());
+  const std::vector<bool> dynamic_dimensions =
+      Permute(shape.dynamic_dimensions(), permutation);
+
+  Shape new_shape(shape.element_type(),
+                  Permute(shape.dimensions(), permutation),
+                  absl::InlinedVector<bool, 8>(dynamic_dimensions.begin(),
+                                               dynamic_dimensions.end()),
+                  {});
+  if (shape.has_layout()) {
+    *new_shape.mutable_layout() = shape.layout();
+    for (int64_t& dim : *new_shape.mutable_layout()->mutable_minor_to_major()) {
+      dim = permutation[dim];
+    }
+  }
+  return new_shape;
 }
 
 /* static */ Shape ShapeUtil::DeleteDimension(int64_t dim_to_delete,

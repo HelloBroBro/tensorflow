@@ -97,6 +97,22 @@ cc_library(
 )
 
 cc_library(
+    name = "op_stats_to_hlo_stats",
+    srcs = ["op_stats_to_hlo_stats.cc"],
+    hdrs = ["op_stats_to_hlo_stats.h"],
+    deps = [
+        ":op_metrics_to_record",
+        "//tensorflow/core/profiler/protobuf:hlo_stats_proto_cc",
+        "//tensorflow/core/profiler/protobuf:op_metrics_proto_cc",
+        "//tensorflow/core/profiler/protobuf:op_stats_proto_cc",
+        "//tensorflow/core/profiler/utils:math_utils",
+        "@com_google_absl//absl/strings",
+        "@local_xla//xla/tsl/profiler/convert:xla_op_utils",
+        "@local_xla//xla/tsl/profiler/utils:tf_op_utils",
+    ],
+)
+
+cc_library(
     name = "op_stats_to_op_profile",
     srcs = ["op_stats_to_op_profile.cc"],
     hdrs = ["op_stats_to_op_profile.h"],
@@ -642,6 +658,7 @@ cc_library(
     deps = [
         ":hlo_to_tools_data",
         ":multi_xplanes_to_op_stats",
+        ":op_stats_to_hlo_stats",
         ":op_stats_to_input_pipeline_analysis",
         ":op_stats_to_op_profile",
         ":op_stats_to_overview_page",
@@ -1179,6 +1196,19 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_map",
         "@local_xla//xla/tsl/lib/gtl:map_util",
         "@local_xla//xla/tsl/profiler/utils:timespan",
+    ],
+)
+
+cc_library(
+    name = "inference_stats_combiner",
+    srcs = ["inference_stats_combiner.cc"],
+    hdrs = ["inference_stats_combiner.h"],
+    deps = [
+        "//tensorflow/core/profiler/protobuf:inference_stats_proto_cc",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/strings:string_view",
+        "@local_xla//xla/tsl/lib/gtl:map_util",
     ],
 )
 

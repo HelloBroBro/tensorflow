@@ -65,6 +65,82 @@ limitations under the License.
 namespace xla {
 namespace hlo_sharding_util {
 
+// Apply the formatting steps to get a shardable shape.
+HloInstruction* FormatShape(HloInstruction* data,
+                            absl::Span<const FormattingStep> formatting_steps,
+                            HloComputation* computation) {
+  for (const FormattingStep& step : formatting_steps) {
+    switch (step.formatting_opcode) {
+      case HloOpcode::kBitcast:
+      case HloOpcode::kCopy: {
+        data = computation->AddInstruction(HloInstruction::CreateUnary(
+            step.output_shape, step.formatting_opcode, data));
+        break;
+      }
+      case HloOpcode::kReshape: {
+        data = computation->AddInstruction(
+            HloInstruction::CreateReshape(step.output_shape, data));
+        break;
+      }
+      case HloOpcode::kPad: {
+        PaddingConfig padding_config;
+        for (int64_t i = 0; i < step.output_shape.rank(); ++i) {
+          auto padding_config_dim = padding_config.add_dimensions();
+          padding_config_dim->set_edge_padding_low(0);
+          padding_config_dim->set_interior_padding(0);
+          padding_config_dim->set_edge_padding_high(
+              step.output_shape.dimensions(i) - data->shape().dimensions(i));
+        }
+        HloInstruction* padding =
+            step.padding_value
+                ? step.padding_value
+                : computation->AddInstruction(HloInstruction::CreateConstant(
+                      LiteralUtil::Zero(step.output_shape.element_type())));
+        data = computation->AddInstruction(HloInstruction::CreatePad(
+            step.output_shape, data, padding, padding_config));
+        break;
+      }
+      default:
+        LOG(FATAL) << "Unsupported formatting step";
+    }
+  }
+  return data;
+}
+
+HloInstruction* ReverseFormatShape(
+    HloInstruction* data, absl::Span<const FormattingStep> formatting_steps,
+    HloComputation* computation) {
+  for (int64_t i = formatting_steps.size() - 1; i >= 0; --i) {
+    const FormattingStep& step = formatting_steps[i];
+    const Shape& previous_shape =
+        step.reverse_input_shape ? *step.reverse_input_shape : step.input_shape;
+    switch (step.formatting_opcode) {
+      case HloOpcode::kBitcast:
+      case HloOpcode::kCopy: {
+        data = computation->AddInstruction(HloInstruction::CreateUnary(
+            previous_shape, step.formatting_opcode, data));
+        break;
+      }
+      case HloOpcode::kReshape: {
+        data = computation->AddInstruction(
+            HloInstruction::CreateReshape(previous_shape, data));
+        break;
+      }
+      case HloOpcode::kPad: {
+        std::vector<int64_t> start_indices(previous_shape.rank(), 0);
+        std::vector<int64_t> strides(previous_shape.rank(), 1);
+        data = computation->AddInstruction(
+            HloInstruction::CreateSlice(previous_shape, data, start_indices,
+                                        previous_shape.dimensions(), strides));
+        break;
+      }
+      default:
+        LOG(FATAL) << "Unsupported formatting step";
+    }
+  }
+  return data;
+}
+
 void GatherScatterDims::append(const GatherScatterDims& other) {
   operand_dims.insert(operand_dims.end(), other.operand_dims.begin(),
                       other.operand_dims.end());
@@ -1806,52 +1882,6 @@ std::optional<HloSharding> ScatterUpdateShardingFromOutputParallelDimensions(
   return PropagateShardingAlongDimsAndReplicateOthers(
       output_sharding, parallel_dims.operand_dims, parallel_dims.output_dims,
       scatter.scatter_updates()[0]->shape().rank());
-}
-
-HloSharding GatherOutputOrScatterUpdateShardingFromIndicesParallelDimensions(
-    const HloSharding& indices_sharding,
-    const int64_t output_or_update_shape_rank,
-    absl::Span<const int64_t> indices_parallel_dims,
-    absl::Span<const int64_t> output_or_update_parallel_dims) {
-  if (indices_sharding.IsTileMaximal() || indices_sharding.IsManual()) {
-    return indices_sharding;
-  }
-  CHECK_EQ(output_or_update_parallel_dims.size(), indices_parallel_dims.size());
-  absl::InlinedVector<int64_t, 4> output_or_update_tiling(
-      output_or_update_shape_rank, 1);
-  absl::InlinedVector<int64_t, 4> relevant_indices_dims;
-  // Pass through indices' sharding on index parallel dimensions.
-  for (int i = 0; i != output_or_update_parallel_dims.size(); ++i) {
-    const int output_or_update_idx = output_or_update_parallel_dims[i];
-    CHECK_LT(output_or_update_idx, output_or_update_shape_rank);
-    const int indices_idx = indices_parallel_dims[i];
-    output_or_update_tiling[output_or_update_idx] =
-        indices_sharding.tile_assignment().dim(indices_idx);
-    relevant_indices_dims.push_back(indices_idx);
-  }
-
-  HloSharding relevant_indices_sharding =
-      PartiallyReplicateTiledShardingOnAllDimsExcept(indices_sharding,
-                                                     relevant_indices_dims);
-  if (relevant_indices_sharding.IsTileMaximal()) {
-    return relevant_indices_sharding;
-  }
-
-  // Append subgroup dimensions.
-  for (int64_t i = relevant_indices_sharding.TiledDataRank();
-       i != relevant_indices_sharding.tile_assignment().num_dimensions(); ++i) {
-    output_or_update_tiling.push_back(
-        relevant_indices_sharding.tile_assignment().dim(i));
-  }
-  auto output_tile_assignment =
-      relevant_indices_sharding.tile_assignment().Reshape(
-          output_or_update_tiling);
-  return relevant_indices_sharding.ReplicateOnLastTileDim()
-             ? HloSharding::PartialTile(output_tile_assignment,
-                                        indices_sharding.metadata())
-             : HloSharding::Subgroup(output_tile_assignment,
-                                     relevant_indices_sharding.subgroup_types(),
-                                     indices_sharding.metadata());
 }
 
 absl::StatusOr<std::pair<std::unique_ptr<HloInstruction>, HloOpcode>>
