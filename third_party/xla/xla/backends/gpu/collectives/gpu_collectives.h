@@ -25,7 +25,9 @@ limitations under the License.
 #include "xla/core/collectives/clique_id.h"
 #include "xla/core/collectives/clique_key.h"
 #include "xla/core/collectives/collectives.h"
+#include "xla/core/collectives/communicator.h"
 #include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/stream.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/xla_data.pb.h"
 
@@ -34,6 +36,9 @@ namespace xla::gpu {
 // XLA:GPU extension of the Collectives interface with GPU-specific APIs.
 class GpuCollectives : public Collectives {
  public:
+  // Returns the default collectives implementation for GPU backend.
+  static GpuCollectives* Default();
+
   // A callback to get a unique clique id.
   using CliqueIdCallback =  // NOLINT
       std::function<absl::StatusOr<CliqueId>(const CliqueKey&)>;
@@ -48,6 +53,18 @@ class GpuCollectives : public Collectives {
     stream_executor::StreamExecutor* stream_executor_;
   };
 
+  // GPU collectives executor is just a wrapper around the Stream.
+  class Executor : public Communicator::Executor {
+   public:
+    explicit Executor(stream_executor::Stream* stream);
+    stream_executor::Stream* stream() const;
+
+   private:
+    stream_executor::Stream* stream_;
+  };
+
+  static Executor On(se::Stream& stream) { return Executor(&stream); }
+
   // GPU communicator configuration.
   //
   // For NCCL backend see configuration options documentation at:
@@ -56,6 +73,9 @@ class GpuCollectives : public Collectives {
     bool split_share = false;
     int64_t max_nchannels = 0;
   };
+
+  // Returns true if GPU collectives are implemented.
+  virtual bool IsImplemented() const = 0;
 
   // Returns true if collectives backend uses global config.
   virtual bool IsGlobalConfig() const = 0;
